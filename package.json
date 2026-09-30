@@ -16,6 +16,7 @@
     "desktop:build": "tauri build --bundles app"
   },
   "dependencies": {
+    "@house-edge/analytics": "file:vendor/house-edge-analytics-0.1.1.tgz",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.8.0",
     "lucide-react": "^0.468.0",

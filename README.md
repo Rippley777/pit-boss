@@ -57,7 +57,7 @@ A preset's environment configuration maps a variable name to a variable **name**
 DATABASE_URL=PIT_BOSS_DATABASE_URL
 ```
 
-The database stores the names only. Export the source variable in your shell and start `npm run desktop` from that shell. Finder-launched apps inherit a different environment; missing source variables produce a visible error before launch. The same applies to developer tools installed through shell version managers: launch from your development shell to inherit its PATH. VS Code's `code` command must be installed on PATH for the editor action.
+The database stores the names only. Export the source variable in your shell and start `npm run desktop` from that shell. Finder-launched apps inherit a different environment; missing source variables produce a visible error before launch. On Unix, project runs load PATH from your configured login shell (including interactive startup files for Zsh, Bash, and Fish), so tools installed through version managers such as NVM are available in desktop launches. If shell startup fails or exceeds five seconds, runs use the inherited PATH. VS Code's `code` command must be installed on PATH for the editor action.
 
 Known sensitive inherited variables (names containing SECRET, TOKEN, PASSWORD, API_KEY, PRIVATE_KEY, or CREDENTIAL) and all explicitly bound values are redacted before event delivery and persistence, even when split across reads. This is not a general-purpose data-loss prevention system: do not paste secrets into command text or print unrelated sensitive data. Environment files are detected by filename, never read into the UI.
 
@@ -122,3 +122,11 @@ Rust integration tests execute harmless commands in temporary directories and co
 [MIT NON-AI License](LICENSE). This custom, source-available license permits use, modification, and redistribution subject to its terms, but **prohibits all AI/ML use of the code**, including training, inference, AI integrations, and supplying the code to AI coding tools, unless separately authorized in writing by the applicable copyright holder(s). It is not the standard MIT License or an OSI-approved open-source license.
 
 Third-party components and assets retain their own licenses. Previously granted licenses are not retroactively revoked. See the license file for the full terms.
+
+## House Edge browser analytics
+
+The browser version includes House Edge page/view tracking, anonymous sessions, errors, and Web Vitals. Native Tauri sessions are always excluded, even when analytics environment variables are set. Named views are mapped to fixed paths; project names, file contents, and search text are not used as page names.
+
+Create a House Edge project with key `pit-boss` and allow this site's exact origin. Set `VITE_HOUSE_EDGE_KEY` to its **browser ingestion key** and `VITE_HOUSE_EDGE_ENDPOINT` to your collector URL ending in `/api/collect`, using `.env.local` or your build environment. `.env.example` lists the settings. Rebuild and redeploy the browser version, then check Live Activity for `page_view` and `session_start` after about five seconds.
+
+Tracking is off when the key or endpoint is missing, and development requires `VITE_HOUSE_EDGE_TRACK_DEVELOPMENT=true`. Do Not Track is respected. The SDK is installed from the checked-in `vendor/house-edge-analytics-0.1.1.tgz`, so independent builds need no sibling House Edge checkout. Commit the tarball with its package manifest and lockfile.

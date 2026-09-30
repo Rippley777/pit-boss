@@ -1,3 +1,4 @@
+import { trackView } from "./lib/analytics";
 import {
   Activity,
   ArrowRight,
@@ -98,6 +99,9 @@ export default function App() {
     (text: string, error = false) => setToast({ text, error }),
     [],
   );
+  useEffect(() => {
+    trackView(page);
+  }, [page]);
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 6000);

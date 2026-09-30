@@ -111,6 +111,8 @@ impl Runner {
         secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
         secrets.dedup();
         let git = git::inspect(&base);
+        #[cfg(unix)]
+        let shell_path = login_shell_path().await;
         // Hold reservation through spawn so simultaneous starts cannot bypass concurrency policy.
         let mut active = self.active.lock().map_err(|e| e.to_string())?;
         if active
@@ -126,6 +128,9 @@ impl Runner {
         let mut cmd = {
             let mut c = Command::new("/bin/sh");
             c.args(["-c", &preset.command]);
+            if let Some(path) = shell_path {
+                c.env("PATH", path);
+            }
             c.process_group(0);
             c
         };
@@ -294,6 +299,53 @@ impl Runner {
         }
     }
 }
+#[cfg(unix)]
+async fn login_shell_path() -> Option<String> {
+    static PATH: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
+    PATH.get_or_init(probe_login_shell_path).await.clone()
+}
+#[cfg(unix)]
+async fn probe_login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| std::path::Path::new(s).is_absolute() && std::path::Path::new(s).is_file())
+        .unwrap_or_else(|| "/bin/sh".into());
+    let mut probe = unix_command(&shell, "printf '\\0%s\\0' \"$PATH\"");
+    probe
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(5), probe.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    // Startup scripts may print banners; delimit the requested value explicitly.
+    let path = output.stdout.split(|b| *b == 0).nth(1)?;
+    let path = String::from_utf8(path.to_vec()).ok()?;
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+#[cfg(unix)]
+fn unix_command(shell: &str, script: &str) -> Command {
+    let mut command = Command::new(shell);
+    // Desktop launches do not inherit terminal PATH additions. Load login and
+    // interactive startup files, including NVM initialization in .zshrc/.bashrc.
+    let flags = match std::path::Path::new(shell)
+        .file_name()
+        .and_then(|s| s.to_str())
+    {
+        Some("zsh" | "bash" | "fish") => "-lic",
+        _ => "-lc",
+    };
+    command.args([flags, script]);
+    command
+}
 fn kill_group(pid: u32) {
     #[cfg(unix)]
     unsafe {
@@ -395,6 +447,43 @@ async fn stream<R: tokio::io::AsyncRead + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn loads_shell_startup_path_for_desktop_commands() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::write(
+            dir.path().join(".zshrc"),
+            "export PATH=\"$ZDOTDIR/bin:$PATH\"\n",
+        )
+        .unwrap();
+        for (name, script) in [
+            ("yarn", "#!/bin/sh\nexec node\n"),
+            ("node", "#!/bin/sh\nprintf startup-tools-found\n"),
+        ] {
+            let path = bin.join(name);
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let output = unix_command("/bin/zsh", "yarn")
+            .env("ZDOTDIR", dir.path())
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(Stdio::null())
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "startup-tools-found"
+        );
+    }
     #[tokio::test]
     async fn runner_streams_persists_and_rejects_unapproved_commands() {
         let dir = tempfile::tempdir().unwrap();
@@ -486,6 +575,11 @@ mod lifecycle_tests {
             icon: "Terminal".into(),
             environment: "Local".into(),
             confirmation: false,
+            confirmation_mode: String::new(),
+            dangerous: false,
+            pinned: false,
+            sort_order: 0,
+            keyboard_shortcut: String::new(),
             persistent: false,
             concurrent: false,
             env: Default::default(),
