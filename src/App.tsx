@@ -52,7 +52,12 @@ import {
 import ProjectCard from "./components/ProjectCard";
 import Terminal from "./components/Terminal";
 import ProjectDetail, { RunTable } from "./components/ProjectDetail";
-import { AddProjectDialog, Palette, RunDialog } from "./components/Dialogs";
+import {
+  AddProjectDialog,
+  CommandDialog,
+  Palette,
+  RunDialog,
+} from "./components/Dialogs";
 
 const navigation = [
   { name: "The Pit", icon: Radio },
@@ -66,7 +71,8 @@ export default function App() {
   const [data, setData] = useState<Snapshot>({ projects: [], runs: [] }),
     [loading, setLoading] = useState(true),
     [page, setPage] = useState<Page>("The Pit"),
-    [projectId, setProjectId] = useState<string | null>(null);
+    [projectId, setProjectId] = useState<string | null>(null),
+    [actionProjectId, setActionProjectId] = useState<string | null>(null);
   const [search, setSearch] = useState(""),
     [status, setStatus] = useState("all"),
     [group, setGroup] = useState("All projects"),
@@ -142,14 +148,36 @@ export default function App() {
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest("input, textarea, select, [contenteditable='true']")
+      )
+        return;
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "k"
+      ) {
         e.preventDefault();
         setPalette((p) => !p);
+        return;
+      }
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.altKey) return;
+      const key = e.key.toUpperCase();
+      const match = data.projects
+        .flatMap((project) =>
+          project.commands.map((preset) => ({ project, preset })),
+        )
+        .find(({ preset }) => preset.keyboardShortcut?.toUpperCase() === key);
+      if (match) {
+        e.preventDefault();
+        request(match);
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  }, [data.projects]);
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -223,6 +251,8 @@ export default function App() {
           project.id,
           preset.id,
           preset.confirmation ||
+            preset.dangerous ||
+            preset.confirmationMode === "Always" ||
             preset.environment.toLowerCase() === "production"
             ? project.name
             : "run",
@@ -291,6 +321,7 @@ export default function App() {
     ports = running.flatMap((r) => r.ports.map((port) => ({ port, run: r }))),
     deployments = data.runs.filter((r) => r.category === "Deploy");
   const selected = data.projects.find((p) => p.id === projectId),
+    actionProject = data.projects.find((p) => p.id === actionProjectId),
     memory = running.reduce((sum, r) => sum + r.memory, 0),
     cpu = running.reduce((sum, r) => sum + r.cpu, 0);
   const filteredRuns = useMemo(
@@ -340,6 +371,7 @@ export default function App() {
     },
     onOpen: open,
     onUrl: url,
+    onAddAction: (p: Project) => setActionProjectId(p.id),
   };
   const time = new Date(now).toLocaleTimeString([], {
     hour: "2-digit",
@@ -531,6 +563,7 @@ export default function App() {
                 onOpen={open}
                 onUrl={url}
                 onCopy={copy}
+                onAddAction={(p) => setActionProjectId(p.id)}
               />
             ) : (
               <>
@@ -1548,6 +1581,13 @@ export default function App() {
           onConfirm={confirmRun}
         />
       )}{" "}
+      {actionProject && (
+        <CommandDialog
+          project={actionProject}
+          onClose={() => setActionProjectId(null)}
+          onSave={save}
+        />
+      )}
       {palette && (
         <Palette
           projects={data.projects}

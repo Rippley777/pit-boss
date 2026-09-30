@@ -2,7 +2,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createDemo } from "./demo";
-import type { Project, Run, Snapshot } from "./types";
+import type { Preset, Project, Run, Snapshot } from "./types";
 export const isDesktop = "__TAURI_INTERNALS__" in window;
 const key = "pit-boss-demo-v1";
 let demo: Snapshot;
@@ -11,6 +11,29 @@ try {
 } catch {
   demo = createDemo();
 }
+function upgrade(snapshot: Snapshot): Snapshot {
+  return {
+    ...snapshot,
+    projects: snapshot.projects.map((p) => ({
+      ...p,
+      suggestions: p.suggestions || [],
+      commands: (p.commands || []).map((c, sortOrder) => ({
+        ...c,
+        description: c.description || "",
+        icon: c.icon || "Terminal",
+        confirmationMode: c.confirmationMode || (c.confirmation
+          ? ("Always" as const)
+          : ("Never" as const)),
+        dangerous: c.dangerous || false,
+        pinned: c.pinned || false,
+        sortOrder: c.sortOrder ?? sortOrder,
+        keyboardShortcut: c.keyboardShortcut || "",
+      })),
+    })),
+  };
+}
+
+demo = upgrade(demo);
 const listeners = new Set<(run: Run) => void>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 function persist() {
@@ -57,6 +80,12 @@ export const api = {
         "Directory scanning requires the desktop app. Run npm run desktop.",
       );
     return invoke("scan_projects", { path });
+  },
+  async suggestions(projectId: string): Promise<Preset[]> {
+    if (isDesktop) return invoke("suggest_actions", { projectId });
+    return structuredClone(
+      demo.projects.find((p) => p.id === projectId)?.suggestions || [],
+    );
   },
   async save(project: Project): Promise<Project> {
     if (isDesktop) return invoke("save_project", { project });

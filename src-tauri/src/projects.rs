@@ -23,14 +23,51 @@ fn preset(name: &str, cmd: &str, category: &str) -> Preset {
     Preset {
         id: id(),
         name: name.into(),
+        description: String::new(),
         command: cmd.into(),
         cwd: String::new(),
         category: category.into(),
+        icon: "Terminal".into(),
         environment: "Local".into(),
         confirmation: category == "Deploy",
+        confirmation_mode: if category == "Deploy" {
+            "Only in Production".into()
+        } else {
+            "Never".into()
+        },
+        dangerous: false,
+        pinned: matches!(category, "Development" | "Build" | "Test" | "Deploy"),
+        sort_order: 0,
+        keyboard_shortcut: String::new(),
         persistent: category == "Development",
         concurrent: false,
         env: BTreeMap::new(),
+    }
+}
+fn action_label(name: &str) -> String {
+    match name.to_ascii_lowercase().as_str() {
+        "dev" | "start" | "serve" => "Run Dev".into(),
+        "build" => "Build".into(),
+        "test" | "tests" | "check" => "Run Tests".into(),
+        "lint" => "Run Linter".into(),
+        "format" | "fmt" => "Format Code".into(),
+        "typecheck" | "type-check" | "types" => "Type Check".into(),
+        "db:seed" | "db-seed" | "seed" => "Seed Database".into(),
+        "db:migrate" | "migrate" | "migration" => "Run Migrations".into(),
+        "db:reset" | "reset-db" => "Reset Database".into(),
+        "generate" | "gen" => "Generate Types".into(),
+        "storybook" => "Open Storybook".into(),
+        other => other
+            .split([':', '-', '_'])
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut c = part.chars();
+                c.next()
+                    .map(|first| first.to_uppercase().to_string() + c.as_str())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }
 pub fn detect(raw: &str) -> Result<Project, String> {
@@ -51,6 +88,7 @@ pub fn detect(raw: &str) -> Result<Project, String> {
         package_manager: String::new(),
         git: git::inspect(&path),
         commands: vec![],
+        suggestions: vec![],
         favorite: false,
         group: "My projects".into(),
         color: "lime".into(),
@@ -100,7 +138,7 @@ pub fn detect(raw: &str) -> Result<Project, String> {
                         "Custom"
                     };
                     p.commands.push(preset(
-                        name,
+                        &action_label(name),
                         &format!("{pm} run {}", shell_quote(name)),
                         category,
                     ));
@@ -222,6 +260,181 @@ pub fn scan(raw: &str) -> Result<Vec<Project>, String> {
         .iter()
         .filter_map(|p| detect(&p.to_string_lossy()).ok())
         .collect())
+}
+
+pub fn suggestions(project: &Project) -> Result<Vec<Preset>, String> {
+    let root = resolve(&project.path)?;
+    let detected = detect(&project.path)?;
+    let mut candidates = detected.commands;
+    if let Ok(makefile) = fs::read_to_string(
+        root.join("Makefile")
+            .exists()
+            .then_some("Makefile")
+            .unwrap_or("makefile"),
+    ) {
+        for line in makefile.lines() {
+            let Some((target, _)) = line.split_once(':') else {
+                continue;
+            };
+            let target = target.trim();
+            if target.is_empty()
+                || target.starts_with('.')
+                || target.contains([' ', '\t', '%', '='])
+                || target.starts_with('#')
+            {
+                continue;
+            }
+            let category = if target.contains("test") {
+                "Test"
+            } else if target.contains("build") {
+                "Build"
+            } else if target.contains("deploy") {
+                "Deploy"
+            } else {
+                "Utilities"
+            };
+            let mut action = preset(
+                &action_label(target),
+                &format!("make {}", shell_quote(target)),
+                category,
+            );
+            action.description = format!("Run the `{target}` Make target.");
+            action.pinned = false;
+            candidates.push(action);
+        }
+    }
+    fn visit(root: &Path, dir: &Path, depth: usize, project: &Project, out: &mut Vec<Preset>) {
+        if depth > 5 || out.len() >= 80 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if out.len() >= 80 {
+                break;
+            }
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if ![
+                    "node_modules",
+                    "target",
+                    "dist",
+                    "build",
+                    "vendor",
+                    ".git",
+                    ".venv",
+                    "venv",
+                    "__pycache__",
+                ]
+                .contains(&name.as_str())
+                {
+                    visit(root, &path, depth + 1, project, out);
+                }
+                continue;
+            }
+            let Some(ext) = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+            else {
+                continue;
+            };
+            if !["sh", "py", "js", "mjs", "cjs", "ts"].contains(&ext.as_str()) {
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            let rel = relative.to_string_lossy().replace('\\', "/");
+            if !["scripts/", "tools/", "bin/"]
+                .iter()
+                .any(|prefix| rel.starts_with(prefix))
+            {
+                continue;
+            }
+            let quote = shell_quote(&rel);
+            let command = match ext.as_str() {
+                "sh" => format!("sh {quote}"),
+                "py" => format!("python {quote}"),
+                "js" | "mjs" | "cjs" => format!("node {quote}"),
+                "ts" => format!(
+                    "{} exec tsx {quote}",
+                    if project.package_manager.is_empty() {
+                        "npx"
+                    } else {
+                        &project.package_manager
+                    }
+                ),
+                _ => continue,
+            };
+            let stem = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .replace('-', " ")
+                .replace('_', " ");
+            let name = stem
+                .split_whitespace()
+                .map(|s| {
+                    let mut chars = s.chars();
+                    chars
+                        .next()
+                        .map(|c| c.to_uppercase().to_string() + chars.as_str())
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let category = if name.to_lowercase().contains("test") {
+                "Test"
+            } else if name.to_lowercase().contains("deploy") {
+                "Deploy"
+            } else if ["seed", "migrat", "database", "db "]
+                .iter()
+                .any(|needle| name.to_lowercase().contains(needle))
+            {
+                "Database"
+            } else {
+                "Utilities"
+            };
+            let mut action = preset(&name, &command, category);
+            action.description = format!("Run {}", relative.display());
+            action.icon = if category == "Database" {
+                "Database"
+            } else {
+                "FileCode"
+            }
+            .into();
+            action.cwd = relative
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .filter(|p| !p.is_empty())
+                .unwrap_or_default();
+            action.pinned = false;
+            out.push(action);
+        }
+    }
+    visit(&root, &root, 0, project, &mut candidates);
+    candidates.retain(|candidate| {
+        !project.commands.iter().any(|saved| {
+            saved.name.eq_ignore_ascii_case(&candidate.name) && saved.command == candidate.command
+        }) && !project.suggestions.iter().any(|saved| {
+            saved.name.eq_ignore_ascii_case(&candidate.name) && saved.command == candidate.command
+        })
+    });
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|c| seen.insert((c.name.to_lowercase(), c.command.clone())));
+    for (i, c) in candidates.iter_mut().enumerate() {
+        c.sort_order = project.commands.len() + i;
+    }
+    Ok(candidates)
 }
 
 #[cfg(test)]

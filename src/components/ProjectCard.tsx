@@ -13,7 +13,7 @@ import {
 import { useState } from "react";
 import { ago, projectState } from "../bridge";
 import type { Project, Run, RunRequest } from "../types";
-import { Branch, ProjectIcon, StatusBadge } from "./ui";
+import { ActionGlyph, Branch, ProjectIcon, StatusBadge } from "./ui";
 export default function ProjectCard({
   project: p,
   runs,
@@ -24,6 +24,7 @@ export default function ProjectCard({
   onSave,
   onOpen,
   onUrl,
+  onAddAction,
 }: {
   project: Project;
   runs: Run[];
@@ -34,6 +35,7 @@ export default function ProjectCard({
   onSave: (p: Project) => void;
   onOpen: (p: Project, target: string) => void;
   onUrl: (url: string) => void;
+  onAddAction: (p: Project) => void;
 }) {
   const [menu, setMenu] = useState(false),
     own = runs.filter((r) => r.projectId === p.id),
@@ -42,7 +44,14 @@ export default function ProjectCard({
     last = own[0],
     deploy = own.find((r) => r.category === "Deploy"),
     dev = p.commands.find((c) => c.category === "Development"),
-    deployment = p.commands.find((c) => c.category === "Deploy");
+    deployment = p.commands.find((c) => c.category === "Deploy"),
+    pinned = [...p.commands]
+      .filter((c) => c.pinned)
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .slice(0, 2),
+    otherActions = p.commands.filter(
+      (c) => !pinned.some((item) => item.id === c.id),
+    );
   return (
     <article className={`project-card ${status}`}>
       <div className="card-top">
@@ -60,6 +69,14 @@ export default function ProjectCard({
           onClick={() => onSave({ ...p, favorite: !p.favorite })}
         >
           <Star size={13} fill={p.favorite ? "currentColor" : "none"} />
+        </button>
+        <button
+          className="icon-btn card-add-action"
+          title={`Add an action to ${p.name}`}
+          aria-label={`Add action to ${p.name}`}
+          onClick={() => onAddAction(p)}
+        >
+          <span>+</span>
         </button>
         <div className="menu-wrap">
           <button
@@ -79,6 +96,8 @@ export default function ProjectCard({
               <div className="dropdown">
                 {[
                   ["Details & commands", "detail"],
+                  ["Manage actions", "actions"],
+                  ["Add action", "add-action"],
                   ["Open in VS Code", "editor"],
                   ["Open terminal here", "terminal"],
                   ["Open repository", "repository"],
@@ -87,12 +106,40 @@ export default function ProjectCard({
                     key={action}
                     onClick={() => {
                       setMenu(false);
-                      if (action === "detail") onDetail();
+                      if (action === "detail" || action === "actions")
+                        onDetail();
+                      else if (action === "add-action") onAddAction(p);
                       else onOpen(p, action);
                     }}
                   >
                     {label}
                     <ArrowUpRight size={12} />
+                  </button>
+                ))}
+                {otherActions.length > 0 && (
+                  <div className="dropdown-divider" />
+                )}
+                {otherActions.map((action) => (
+                  <button
+                    className="dropdown-action"
+                    key={action.id}
+                    title={`${action.description || action.name} · ${action.command}`}
+                    onClick={() => {
+                      setMenu(false);
+                      onRun({
+                        project: p,
+                        preset: action,
+                        restart: runs.find(
+                          (r) =>
+                            r.projectId === p.id &&
+                            r.presetId === action.id &&
+                            r.status === "running",
+                        ),
+                      });
+                    }}
+                  >
+                    <ActionGlyph name={action.icon} />
+                    <span>{action.name}</span>
                   </button>
                 ))}
               </div>
@@ -182,6 +229,28 @@ export default function ProjectCard({
           <Rocket size={12} />
           Deploy
         </button>
+        {pinned.map((action) => (
+          <button
+            key={action.id}
+            className="subtle-btn card-pinned-action"
+            title={`${action.description || action.name} · ${action.command}`}
+            onClick={() =>
+              onRun({
+                project: p,
+                preset: action,
+                restart: runs.find(
+                  (r) =>
+                    r.projectId === p.id &&
+                    r.presetId === action.id &&
+                    r.status === "running",
+                ),
+              })
+            }
+          >
+            <ActionGlyph name={action.icon} size={12} />
+            {action.name}
+          </button>
+        ))}
         <button
           className="subtle-btn"
           disabled={!last}

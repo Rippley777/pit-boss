@@ -6,12 +6,24 @@ import {
   Check,
   ChevronRight,
   Circle,
+  Code2,
   Cpu,
+  Database,
+  FileCode,
+  FlaskConical,
   GitBranch,
+  Hammer,
   Layers,
   Network,
+  Package,
+  Play,
+  Rocket,
   ShieldCheck,
+  Sparkles,
   Spade,
+  Terminal,
+  Trash2,
+  Wrench,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -45,6 +57,33 @@ export function ProjectIcon({
       <Icon size={small ? 17 : 23} strokeWidth={1.7} />
     </span>
   );
+}
+const actionIcons: Record<string, LucideIcon> = {
+  Terminal,
+  Play,
+  Rocket,
+  Code2,
+  Database,
+  FileCode,
+  FlaskConical,
+  Hammer,
+  Package,
+  Sparkles,
+  Trash2,
+  Wrench,
+  ShieldCheck,
+  Braces,
+  GitBranch,
+};
+export function ActionGlyph({
+  name,
+  size = 15,
+}: {
+  name: string;
+  size?: number;
+}) {
+  const Icon = actionIcons[name] || Terminal;
+  return <Icon size={size} strokeWidth={1.8} />;
 }
 export function StatusBadge({
   status,

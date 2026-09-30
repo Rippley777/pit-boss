@@ -29,6 +29,16 @@ mod desktop {
             .map_err(|e| e.to_string())?
     }
     #[tauri::command]
+    fn suggest_actions(state: State<AppState>, project_id: String) -> Result<Vec<Preset>, String> {
+        let project = state
+            .store
+            .projects()?
+            .into_iter()
+            .find(|p| p.id == project_id)
+            .ok_or("Project not registered")?;
+        projects::suggestions(&project)
+    }
+    #[tauri::command]
     fn save_project(state: State<AppState>, mut project: Project) -> Result<Project, String> {
         project.path = projects::resolve(&project.path)?.to_string_lossy().into();
         if project.name.trim().is_empty() {
@@ -43,13 +53,33 @@ mod desktop {
             return Err("This directory is already registered.".into());
         }
         let mut ids = std::collections::HashSet::new();
-        for command in &project.commands {
+        let mut shortcuts = std::collections::HashSet::new();
+        for command in project.commands.iter().chain(project.suggestions.iter()) {
             if command.name.trim().is_empty()
                 || command.command.trim().is_empty()
                 || !ids.insert(&command.id)
             {
                 return Err("Commands need unique IDs, a name, and a command.".into());
             }
+            if !command.confirmation_mode.is_empty()
+                && !["Never", "Always", "Only in Production"]
+                    .contains(&command.confirmation_mode.as_str())
+            {
+                return Err("Unknown action confirmation mode.".into());
+            }
+            if !command.keyboard_shortcut.is_empty() {
+                let shortcut = command.keyboard_shortcut.trim().to_uppercase();
+                if shortcut.chars().count() != 1
+                    || !shortcut.chars().all(|c| c.is_ascii_alphanumeric())
+                {
+                    return Err("Action shortcuts must be a single letter or number.".into());
+                }
+                if !shortcuts.insert(shortcut) {
+                    return Err("Each project action needs a unique keyboard shortcut.".into());
+                }
+            }
+        }
+        for command in project.commands.iter().chain(project.suggestions.iter()) {
             let cwd = std::path::Path::new(&project.path)
                 .join(&command.cwd)
                 .canonicalize()
@@ -57,6 +87,12 @@ mod desktop {
             if !cwd.starts_with(&project.path) {
                 return Err("Command directories must be inside the project.".into());
             }
+        }
+        for (sort_order, action) in project.commands.iter_mut().enumerate() {
+            action.sort_order = sort_order;
+        }
+        for (sort_order, action) in project.suggestions.iter_mut().enumerate() {
+            action.sort_order = sort_order;
         }
         state.store.save_project(&project)?;
         Ok(project)
@@ -213,6 +249,7 @@ mod desktop {
                 snapshot,
                 detect_project,
                 scan_projects,
+                suggest_actions,
                 save_project,
                 remove_project,
                 refresh_projects,

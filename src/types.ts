@@ -7,7 +7,9 @@ export type Category =
   | "Deploy"
   | "Database"
   | "Maintenance"
+  | "Utilities"
   | "Custom";
+export type ConfirmationMode = "Never" | "Always" | "Only in Production";
 export interface GitInfo {
   branch: string;
   commit: string;
@@ -20,11 +22,18 @@ export interface GitInfo {
 export interface Preset {
   id: string;
   name: string;
+  description: string;
   command: string;
   cwd: string;
   category: Category;
+  icon: string;
   environment: string;
   confirmation: boolean;
+  confirmationMode: ConfirmationMode;
+  dangerous: boolean;
+  pinned: boolean;
+  sortOrder: number;
+  keyboardShortcut: string;
   persistent: boolean;
   concurrent: boolean;
   env: Record<string, string>;
@@ -38,11 +47,13 @@ export interface Project {
   packageManager: string;
   git: GitInfo;
   commands: Preset[];
+  suggestions: Preset[];
   favorite: boolean;
   group: string;
   color: string;
   envFiles: string[];
 }
+export type ProjectAction = Preset;
 export interface Run {
   id: string;
   projectId: string;

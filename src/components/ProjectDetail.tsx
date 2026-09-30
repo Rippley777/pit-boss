@@ -7,19 +7,22 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GripVertical,
+  MoreHorizontal,
   Pencil,
   Play,
   Plus,
   Rocket,
   Square,
+  Star,
   Terminal,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Preset, Project, Run, RunRequest } from "../types";
-import { ago, duration } from "../bridge";
+import { ago, api, duration } from "../bridge";
 import {
   Branch,
+  ActionGlyph,
   DetailLine,
   Empty,
   ProjectIcon,
@@ -39,6 +42,7 @@ export default function ProjectDetail({
   onOpen,
   onUrl,
   onCopy,
+  onAddAction,
 }: {
   project: Project;
   runs: Run[];
@@ -51,39 +55,109 @@ export default function ProjectDetail({
   onOpen: (p: Project, target: string) => void;
   onUrl: (url: string) => void;
   onCopy: (text: string) => void;
+  onAddAction: (project: Project) => void;
 }) {
-  const [tab, setTab] = useState("Overview"),
+  const [tab, setTab] = useState("Actions"),
     [edit, setEdit] = useState<Preset | "new" | null>(null),
     [drag, setDrag] = useState(""),
+    [actionMenu, setActionMenu] = useState(""),
+    [suggestions, setSuggestions] = useState<Preset[]>(p.suggestions || []),
+    [actionFilter, setActionFilter] = useState(""),
     [name, setName] = useState(p.name),
     [group, setGroup] = useState(p.group),
     [description, setDescription] = useState(p.description);
   const own = runs.filter((r) => r.projectId === p.id),
     active = own.filter((r) => r.status === "running");
+  const ordered = [...p.commands].sort((a, b) => a.sortOrder - b.sortOrder);
+  const actionGroups = [...new Set(ordered.map((c) => c.category || "Custom"))];
+  useEffect(() => {
+    if (tab !== "Actions") return;
+    void api
+      .suggestions(p.id)
+      .then((found) =>
+        setSuggestions((old) => {
+          const all = [...(p.suggestions || []), ...old, ...found];
+          return all.filter(
+            (a, i) =>
+              all.findIndex(
+                (b) => b.name === a.name && b.command === a.command,
+              ) === i &&
+              !p.commands.some(
+                (saved) => saved.name === a.name && saved.command === a.command,
+              ),
+          );
+        }),
+      )
+      .catch(() => {});
+  }, [tab, p.id, p.commands, p.suggestions]);
+  async function addSuggested(action: Preset) {
+    await onSave({
+      ...p,
+      commands: [
+        ...p.commands,
+        { ...action, sortOrder: p.commands.length, pinned: false },
+      ],
+      suggestions: suggestions.filter((s) => s.id !== action.id),
+    });
+    setSuggestions((old) => old.filter((s) => s.id !== action.id));
+  }
+  function duplicate(action: Preset) {
+    void onSave({
+      ...p,
+      commands: [
+        ...p.commands,
+        {
+          ...action,
+          id: crypto.randomUUID(),
+          name: `${action.name} copy`,
+          pinned: false,
+          keyboardShortcut: "",
+          sortOrder: p.commands.length,
+        },
+      ],
+    }).catch(() => {});
+    setActionMenu("");
+  }
   function reorder(id: string, to: number) {
     const commands = [...p.commands],
       from = commands.findIndex((c) => c.id === id);
     if (from < 0 || to < 0 || to >= commands.length) return;
     commands.splice(to, 0, commands.splice(from, 1)[0]);
+    commands.forEach((action, sortOrder) => {
+      action.sortOrder = sortOrder;
+    });
     void onSave({ ...p, commands });
   }
-  const commandList = (
+  const actionRows = (rows: Preset[]) => (
     <div className="command-list">
-      {p.commands.map((c, i) => (
+      {rows.map((c) => (
         <div
-          className="command-row"
+          className={`command-row project-action-row ${c.dangerous ? "dangerous-action" : ""}`}
           key={c.id}
           draggable
           onDragStart={() => setDrag(c.id)}
           onDragOver={(e) => e.preventDefault()}
-          onDrop={() => reorder(drag, i)}
+          onDrop={() =>
+            reorder(
+              drag,
+              ordered.findIndex((item) => item.id === c.id),
+            )
+          }
         >
           <GripVertical size={15} className="muted" />
           <span className="command-type">
-            <Terminal size={17} />
+            <ActionGlyph name={c.icon || "Terminal"} size={17} />
           </span>
           <div className="command-row-info">
-            <strong>{c.name}</strong>
+            <strong>
+              {c.name}
+              {c.dangerous && (
+                <span className="danger-action-label">DANGEROUS</span>
+              )}
+            </strong>
+            {c.description && (
+              <span className="action-description">{c.description}</span>
+            )}
             <code>{c.command}</code>
           </div>
           <span className="tag">{c.category}</span>
@@ -92,17 +166,39 @@ export default function ProjectDetail({
             className="icon-btn"
             title="Move up"
             aria-label={`Move ${c.name} up`}
-            disabled={i === 0}
-            onClick={() => reorder(c.id, i - 1)}
+            disabled={ordered.findIndex((item) => item.id === c.id) === 0}
+            onClick={() =>
+              reorder(c.id, ordered.findIndex((item) => item.id === c.id) - 1)
+            }
           >
             <ArrowUp size={13} />
+          </button>
+          <button
+            className={`pin-button ${c.pinned ? "selected" : ""}`}
+            title={c.pinned ? "Unpin action" : "Pin action"}
+            aria-label={`${c.pinned ? "Unpin" : "Pin"} ${c.name}`}
+            onClick={() =>
+              void onSave({
+                ...p,
+                commands: p.commands.map((x) =>
+                  x.id === c.id ? { ...x, pinned: !x.pinned } : x,
+                ),
+              }).catch(() => {})
+            }
+          >
+            <Star size={13} fill={c.pinned ? "currentColor" : "none"} />
           </button>
           <button
             className="icon-btn"
             title="Move down"
             aria-label={`Move ${c.name} down`}
-            disabled={i === p.commands.length - 1}
-            onClick={() => reorder(c.id, i + 1)}
+            disabled={
+              ordered.findIndex((item) => item.id === c.id) ===
+              ordered.length - 1
+            }
+            onClick={() =>
+              reorder(c.id, ordered.findIndex((item) => item.id === c.id) + 1)
+            }
           >
             <ArrowDown size={13} />
           </button>
@@ -127,15 +223,79 @@ export default function ProjectDetail({
           </button>
           <button
             className="button small secondary"
-            onClick={() => onRun({ project: p, preset: c })}
+            onClick={() =>
+              onRun({
+                project: p,
+                preset: c,
+                restart: own.find(
+                  (r) => r.presetId === c.id && r.status === "running",
+                ),
+              })
+            }
           >
-            <Play size={12} /> Run
+            <Play size={12} />{" "}
+            {own.some((r) => r.presetId === c.id && r.status === "running")
+              ? "Restart"
+              : "Run"}
           </button>
+          <div className="menu-wrap">
+            <button
+              className="icon-btn"
+              aria-label={`More options for ${c.name}`}
+              onClick={() => setActionMenu(actionMenu === c.id ? "" : c.id)}
+            >
+              <MoreHorizontal size={16} />
+            </button>
+            {actionMenu === c.id && (
+              <>
+                <button
+                  className="menu-dismiss"
+                  aria-label="Close action options"
+                  onClick={() => setActionMenu("")}
+                />
+                <div className="dropdown action-dropdown">
+                  {[
+                    ["Edit", "edit"],
+                    ["Duplicate", "duplicate"],
+                    [c.pinned ? "Unpin" : "Pin to toolbar", "pin"],
+                    ["View history", "history"],
+                    ["Delete", "delete"],
+                  ].map(([label, op]) => (
+                    <button
+                      key={op}
+                      onClick={() => {
+                        setActionMenu("");
+                        if (op === "edit") setEdit(c);
+                        else if (op === "duplicate") duplicate(c);
+                        else if (op === "pin")
+                          void onSave({
+                            ...p,
+                            commands: p.commands.map((x) =>
+                              x.id === c.id ? { ...x, pinned: !x.pinned } : x,
+                            ),
+                          }).catch(() => {});
+                        else if (op === "history") {
+                          setActionFilter(c.id);
+                          setTab("History");
+                        } else if (op === "delete")
+                          void onSave({
+                            ...p,
+                            commands: p.commands.filter((x) => x.id !== c.id),
+                          }).catch(() => {});
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       ))}
-      {!p.commands.length && (
-        <Empty title="No commands yet">
-          Add a preset to give this project its first action.
+      {!rows.length && (
+        <Empty title="No actions yet">
+          Add an action for a task you do often.
         </Empty>
       )}
     </div>
@@ -169,7 +329,7 @@ export default function ProjectDetail({
       <div className="page-tabs">
         {[
           "Overview",
-          "Commands",
+          "Actions",
           "Processes",
           "Git",
           "Deployments",
@@ -231,32 +391,115 @@ export default function ProjectDetail({
               </DetailLine>
             </div>
           </div>
-          <SectionHeading title="Command presets" count={p.commands.length}>
-            <button className="text-link" onClick={() => setEdit("new")}>
-              <Plus size={13} /> Add command
-            </button>
-          </SectionHeading>
-          {commandList}
-        </>
-      )}
-      {tab === "Commands" && (
-        <>
           <SectionHeading
-            title="Your command presets"
-            count={p.commands.length}
+            title="Pinned actions"
+            count={p.commands.filter((c) => c.pinned).length}
           >
             <button
-              className="button secondary small"
-              onClick={() => setEdit("new")}
+              className="text-link"
+              onClick={() => {
+                setTab("Actions");
+                onAddAction(p);
+              }}
             >
-              <Plus size={13} /> Add command
+              <Plus size={13} /> Add action
+            </button>
+          </SectionHeading>
+          <div className="overview-action-chips">
+            {ordered
+              .filter((c) => c.pinned)
+              .slice(0, 5)
+              .map((c) => (
+                <button
+                  className="button secondary"
+                  key={c.id}
+                  onClick={() => onRun({ project: p, preset: c })}
+                >
+                  <ActionGlyph name={c.icon} />
+                  {c.name}
+                </button>
+              ))}
+            {!p.commands.some((c) => c.pinned) && (
+              <p className="muted">
+                Pin your most-used actions to keep them close at hand.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+      {tab === "Actions" && (
+        <>
+          <SectionHeading title="Project actions" count={p.commands.length}>
+            <button
+              className="button secondary small"
+              onClick={() => onAddAction(p)}
+            >
+              <Plus size={13} /> Add action
             </button>
           </SectionHeading>
           <p className="muted section-description">
-            Drag to reorder, or use the arrows. Each command runs from this
-            project's directory.
+            Your project controls, ready to run. Drag actions to reorder; pin
+            favorites to the project toolbar.
           </p>
-          {commandList}
+          {actionGroups.map((category) => (
+            <section className="action-group" key={category}>
+              <div className="action-group-heading">
+                <strong>{category}</strong>
+                <span>
+                  {ordered.filter((c) => c.category === category).length}
+                </span>
+              </div>
+              {actionRows(ordered.filter((c) => c.category === category))}
+            </section>
+          ))}
+          <div className="suggested-actions">
+            <SectionHeading
+              title="Suggested actions"
+              count={suggestions.length}
+            >
+              <button
+                className="text-link"
+                onClick={() =>
+                  void api
+                    .suggestions(p.id)
+                    .then(setSuggestions)
+                    .catch(() => {})
+                }
+              >
+                <GitBranch size={13} /> Scan scripts
+              </button>
+            </SectionHeading>
+            <p className="muted section-description">
+              Detected from project scripts and tools. Add only what you want;
+              suggestions never run automatically.
+            </p>
+            {suggestions.length ? (
+              <div className="suggestion-list">
+                {suggestions.map((action) => (
+                  <div className="suggestion-row" key={action.id}>
+                    <ActionGlyph name={action.icon} />
+                    <span>
+                      <strong>{action.name}</strong>
+                      <code>{action.command}</code>
+                    </span>
+                    <span className="tag">{action.category}</span>
+                    <button
+                      className="button small secondary"
+                      onClick={() => void addSuggested(action).catch(() => {})}
+                    >
+                      <Plus size={12} /> Add
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="no-suggestions">
+                No new scripts found. Scripts in <code>scripts/</code>,{" "}
+                <code>tools/</code>, and <code>bin/</code> appear here when
+                available.
+              </div>
+            )}
+          </div>
         </>
       )}
       {tab === "Processes" && (
@@ -374,11 +617,32 @@ export default function ProjectDetail({
             </div>
           )}
           <SectionHeading
-            title={tab === "History" ? "Command history" : "Deployment history"}
+            title={tab === "History" ? "Action history" : "Deployment history"}
           />
+          {tab === "History" && (
+            <div className="history-toolbar">
+              <input
+                aria-label="Search project action history"
+                placeholder="Search action, command, output…"
+                value={
+                  actionFilter.startsWith("search:")
+                    ? actionFilter.slice(7)
+                    : ""
+                }
+                onChange={(e) => setActionFilter(`search:${e.target.value}`)}
+              />
+            </div>
+          )}
           <RunTable
             runs={own.filter(
-              (r) => tab !== "Deployments" || r.category === "Deploy",
+              (r) =>
+                (tab !== "Deployments" || r.category === "Deploy") &&
+                (tab !== "History" ||
+                  (actionFilter.startsWith("search:")
+                    ? `${r.name} ${r.command} ${r.output}`
+                        .toLowerCase()
+                        .includes(actionFilter.slice(7).toLowerCase())
+                    : !actionFilter || r.presetId === actionFilter)),
             )}
             onLogs={onLogs}
           />

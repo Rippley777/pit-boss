@@ -29,23 +29,29 @@ export function RunDialog({
   const [typed, setTyped] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  const production = requests.filter(
-      (r) => r.preset.environment.toLowerCase() === "production",
-    ),
-    required = production.map((r) => r.project.name).join(", ");
+  const protectedActions = requests.filter(
+    ({ preset }) =>
+      preset.dangerous ||
+      preset.environment.toLowerCase() === "production" ||
+      preset.confirmation ||
+      preset.confirmationMode === "Always",
+  );
+  const required = [
+    ...new Set(protectedActions.map(({ project }) => project.name)),
+  ].join(", ");
   return (
     <Modal
       title={
         requests.length > 1
-          ? `Run ${requests.length} commands`
+          ? `Run ${requests.length} actions`
           : requests[0].restart
-            ? "Restart command"
-            : "Ready to run?"
+            ? `Restart ${requests[0].preset.name}`
+            : "Review project action"
       }
       subtitle={
         isDesktop
           ? "Review exactly what will run on your machine."
-          : "Demo mode · these commands will be simulated."
+          : "Demo mode · these actions will be simulated."
       }
       onClose={onClose}
     >
@@ -54,10 +60,20 @@ export function RunDialog({
           <div className="run-review" key={`${project.id}-${preset.id}`}>
             <div className="run-review-title">
               <ProjectIcon project={project} small />
-              <strong>{project.name}</strong>
+              <strong>
+                {project.name} → {preset.name}
+              </strong>
               <span className="tag">{preset.environment}</span>
               {restart && <span className="tag">Restart</span>}
+              {preset.dangerous && (
+                <span className="tag danger-tag">
+                  <ShieldCheck size={11} /> Dangerous
+                </span>
+              )}
             </div>
+            {preset.description && (
+              <p className="review-description">{preset.description}</p>
+            )}
             <code>$ {preset.command}</code>
             <div className="review-path">
               <Terminal size={13} />
@@ -72,16 +88,24 @@ export function RunDialog({
           </div>
         ))}
       </div>
-      {production.length > 0 && (
+      {protectedActions.length > 0 && (
         <div className="production-confirm">
           <ShieldCheck size={18} />
           <div>
-            <strong>Production deployment</strong>
+            <strong>
+              {protectedActions.some(({ preset }) => preset.dangerous)
+                ? "Confirm protected action"
+                : "Production safeguard"}
+            </strong>
             <p>
-              Type <b>{required}</b> to confirm this production action.
+              Type <b>{required}</b> to confirm{" "}
+              {protectedActions.length === 1
+                ? `“${protectedActions[0].preset.name}”`
+                : "these actions"}
+              .
             </p>
             <input
-              aria-label="Production confirmation"
+              aria-label="Action confirmation"
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
               placeholder={required}
@@ -117,7 +141,7 @@ export function RunDialog({
           {busy
             ? "Starting…"
             : requests.length > 1
-              ? "Run all commands"
+              ? "Run all actions"
               : "Confirm & run"}
         </button>
       </div>
@@ -292,6 +316,10 @@ export function AddProjectDialog({
                 await onSave({
                   ...p,
                   commands: p.commands.filter((c) => approved.has(c.id)),
+                  suggestions: [
+                    ...p.suggestions,
+                    ...p.commands.filter((c) => !approved.has(c.id)),
+                  ],
                 });
                 setSelected((previous) => {
                   const next = new Set(previous);
@@ -329,18 +357,18 @@ export function CommandDialog({
       command || makePreset("", "", "Custom"),
     ),
     [env, setEnv] = useState(
-      Object.entries(form.env)
+      Object.entries((command || makePreset("", "", "Custom")).env)
         .map(([k, v]) => `${k}=${v}`)
         .join("\n"),
     ),
     [error, setError] = useState("");
   function field<K extends keyof Preset>(key: K, value: Preset[K]) {
-    setForm({ ...form, [key]: value });
+    setForm((previous) => ({ ...previous, [key]: value }));
   }
   return (
     <Modal
-      title={command ? "Edit command preset" : "Create a command preset"}
-      subtitle={`Configure a command for ${project.name}.`}
+      title={command ? "Edit project action" : "Create a project action"}
+      subtitle={`Configure an action for ${project.name}.`}
       onClose={onClose}
     >
       <form
@@ -360,12 +388,35 @@ export function CommandDialog({
                 );
               bindings[key.trim()] = source.trim();
             }
-            const next = { ...form, env: bindings };
+            const next = {
+              ...form,
+              name: form.name.trim(),
+              command: form.command.trim(),
+              category: (form.category.trim() || "Custom") as Preset["category"],
+              env: bindings,
+              confirmation: form.confirmationMode === "Always",
+              sortOrder: command?.sortOrder ?? project.commands.length,
+            };
+            if (!next.name || !next.command)
+              throw new Error("Action name and command are required.");
+            if (
+              next.keyboardShortcut &&
+              project.commands.some(
+                (c) =>
+                  c.id !== command?.id &&
+                  c.keyboardShortcut.toUpperCase() ===
+                    next.keyboardShortcut.toUpperCase(),
+              )
+            )
+              throw new Error(
+                "That keyboard shortcut is already assigned in this project.",
+              );
             await onSave({
               ...project,
               commands: command
                 ? project.commands.map((c) => (c.id === command.id ? next : c))
                 : [...project.commands, next],
+              suggestions: project.suggestions.filter((c) => c.id !== next.id),
             });
             onClose();
           } catch (e) {
@@ -381,7 +432,17 @@ export function CommandDialog({
           required
           value={form.name}
           onChange={(e) => field("name", e.target.value)}
-          placeholder="Start development server"
+          placeholder="Seed database"
+        />
+        <label className="field-label" htmlFor="command-description">
+          Description
+        </label>
+        <textarea
+          id="command-description"
+          value={form.description}
+          onChange={(e) => field("description", e.target.value)}
+          placeholder="Populate the local database with sample data"
+          rows={2}
         />
         <label className="field-label" htmlFor="command-script">
           Command
@@ -392,21 +453,56 @@ export function CommandDialog({
           required
           value={form.command}
           onChange={(e) => field("command", e.target.value)}
-          placeholder="npm run dev"
+          placeholder="npm run db:seed"
           rows={2}
         />
+        {project.suggestions.length > 0 && (
+          <>
+            <label className="field-label" htmlFor="action-script-browser">
+              Browse detected scripts{" "}
+              <span>choose a suggestion to prefill this action</span>
+            </label>
+            <select
+              id="action-script-browser"
+              value=""
+              onChange={(e) => {
+                const suggested = project.suggestions.find(
+                  (s) => s.id === e.target.value,
+                );
+                if (suggested) {
+                  setForm({ ...suggested, id: command?.id || suggested.id });
+                  setEnv(
+                    Object.entries(suggested.env || {})
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join("\n"),
+                  );
+                }
+              }}
+            >
+              <option value="">Choose a detected project script…</option>
+              {project.suggestions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} — {s.command}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <div className="form-row">
           <div>
             <label className="field-label" htmlFor="command-category">
               Category
             </label>
-            <select
+            <input
               id="command-category"
+              list="action-category-options"
               value={form.category}
               onChange={(e) =>
                 field("category", e.target.value as Preset["category"])
               }
-            >
+              placeholder="Choose or enter a category"
+            />
+            <datalist id="action-category-options">
               {[
                 "Development",
                 "Build",
@@ -414,11 +510,12 @@ export function CommandDialog({
                 "Deploy",
                 "Database",
                 "Maintenance",
+                "Utilities",
                 "Custom",
               ].map((c) => (
-                <option key={c}>{c}</option>
+                <option key={c} value={c} />
               ))}
-            </select>
+            </datalist>
           </div>
           <div>
             <label className="field-label" htmlFor="command-environment">
@@ -435,6 +532,36 @@ export function CommandDialog({
             </select>
           </div>
         </div>
+        <label className="field-label" htmlFor="action-icon">
+          Icon
+        </label>
+        <select
+          id="action-icon"
+          value={form.icon || "Terminal"}
+          onChange={(e) => field("icon", e.target.value)}
+        >
+          {[
+            "Terminal",
+            "Play",
+            "Rocket",
+            "Code2",
+            "Database",
+            "FileCode",
+            "FlaskConical",
+            "Hammer",
+            "Package",
+            "Sparkles",
+            "Trash2",
+            "Wrench",
+            "ShieldCheck",
+            "Braces",
+            "GitBranch",
+          ].map((icon) => (
+            <option key={icon} value={icon}>
+              {icon}
+            </option>
+          ))}
+        </select>
         <label className="field-label" htmlFor="command-cwd">
           Working directory <span>relative to project</span>
         </label>
@@ -459,9 +586,53 @@ export function CommandDialog({
           Values are inherited from your desktop launch environment and redacted
           from captured output.
         </p>
+        <label className="field-label" htmlFor="confirmation-mode">
+          Confirmation
+        </label>
+        <select
+          id="confirmation-mode"
+          value={
+            form.confirmationMode || (form.confirmation ? "Always" : "Never")
+          }
+          onChange={(e) => {
+            const confirmationMode = e.target
+              .value as Preset["confirmationMode"];
+            setForm((previous) => ({
+              ...previous,
+              confirmationMode,
+              confirmation: confirmationMode === "Always",
+            }));
+          }}
+        >
+          <option>Never</option>
+          <option>Always</option>
+          <option>Only in Production</option>
+        </select>
+        <p className="form-hint">
+          Production actions always ask you to type the project name.
+        </p>
+        <label className="field-label" htmlFor="action-shortcut">
+          Keyboard shortcut <span>optional · one letter or number</span>
+        </label>
+        <input
+          id="action-shortcut"
+          value={form.keyboardShortcut}
+          maxLength={1}
+          onChange={(e) =>
+            field(
+              "keyboardShortcut",
+              e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
+            )
+          }
+          placeholder="e.g. T"
+        />
         <div className="checkboxes">
           {[
-            ["confirmation", "Require extra confirmation"],
+            [
+              "dangerous",
+              "Dangerous action · type the project name to confirm",
+            ],
+            ["pinned", "Pin to the project toolbar"],
             ["persistent", "Long-running process"],
             ["concurrent", "Allow concurrent runs"],
           ].map(([key, label]) => (
@@ -469,11 +640,13 @@ export function CommandDialog({
               <input
                 type="checkbox"
                 checked={
-                  form[key as "confirmation" | "persistent" | "concurrent"]
+                  form[
+                    key as "dangerous" | "pinned" | "persistent" | "concurrent"
+                  ]
                 }
                 onChange={(e) =>
                   field(
-                    key as "confirmation" | "persistent" | "concurrent",
+                    key as "dangerous" | "pinned" | "persistent" | "concurrent",
                     e.target.checked,
                   )
                 }
@@ -488,7 +661,7 @@ export function CommandDialog({
             Cancel
           </button>
           <button className="button primary" type="submit">
-            <Check size={14} /> Save preset
+            <Check size={14} /> Save action
           </button>
         </div>
       </form>
@@ -530,8 +703,8 @@ export function Palette({
       },
       ...projects.flatMap((project) => [
         ...project.commands.map((preset) => ({
-          label: `${preset.name} · ${project.name}`,
-          sub: preset.command,
+          label: `${project.name} · ${preset.name}`,
+          sub: `${preset.category} · ${preset.description} · ${preset.command}`,
           icon: <Terminal size={16} />,
           action: () => onRun({ project, preset }),
         })),

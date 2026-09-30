@@ -59,13 +59,11 @@ impl Runner {
             .find(|c| c.id == preset_id)
             .ok_or("Command is not in this project's approved configuration")?
             .clone();
-        if confirmation
-            != if preset.environment.eq_ignore_ascii_case("production") || preset.confirmation {
-                p.name.as_str()
-            } else {
-                "run"
-            }
-        {
+        let needs_review = preset.dangerous
+            || preset.environment.eq_ignore_ascii_case("production")
+            || preset.confirmation
+            || preset.confirmation_mode == "Always";
+        if confirmation != if needs_review { p.name.as_str() } else { "run" } {
             return Err("Review and confirm the command before execution.".into());
         }
         let base = projects::resolve(&p.path)?;
@@ -405,13 +403,20 @@ mod tests {
         p.commands.push(Preset {
             id: "test".into(),
             name: "Test".into(),
+            description: String::new(),
             command:
                 "printf 'first\\n'; sleep 0.2; printf 'second\\n'; printf 'error\\n' >&2; exit 3"
                     .into(),
             cwd: "".into(),
             category: "Test".into(),
+            icon: "Terminal".into(),
             environment: "Local".into(),
             confirmation: false,
+            confirmation_mode: "Never".into(),
+            dangerous: false,
+            pinned: false,
+            sort_order: 0,
+            keyboard_shortcut: String::new(),
             concurrent: false,
             persistent: false,
             env: Default::default(),
@@ -474,9 +479,11 @@ mod lifecycle_tests {
         project.commands.push(Preset {
             id: "lifecycle".into(),
             name: "Lifecycle".into(),
+            description: String::new(),
             command: script.into(),
             cwd: "".into(),
             category: "Test".into(),
+            icon: "Terminal".into(),
             environment: "Local".into(),
             confirmation: false,
             persistent: false,

@@ -41,6 +41,7 @@ npm run desktop:build
 - Local registration and bounded recursive discovery for Git, Node, Rust, Python, Go, Docker, and Make-based projects. Detects package managers, scripts, frameworks, environment-file names, branches, remotes, commit hashes, working-tree changes, and ahead/behind counts.
 - The Pit, a live operations view with project cards, dense tables, favorites, group filters, process metrics, listening ports, recent activity, and a persistent command drawer.
 - Configurable presets with category, environment, relative working directory, inherited environment bindings, confirmation, long-running intent, concurrency policy, drag ordering, and accessible reorder buttons.
+- Project actions with descriptions, icons, category groups, pinned card controls, duplicate/edit/history management, production-aware safeguards, and per-project keyboard shortcuts. Pit Boss suggests actions from package scripts, build tools, and common script folders; suggestions remain disabled until explicitly added.
 - Real Rust shell execution with separate streaming stdout/stderr, duration, exit status, stop, restart, rerun, copy, and clear-visible-output controls.
 - Process-group tracking and termination, including children started by package managers. Listening ports and aggregate CPU/RSS are inspected with `ps` and `lsof` on macOS/Linux.
 - Staging and production targets as deployment presets; deployment history records branch, commit, environment, start/end, exit code, and output.
@@ -115,3 +116,9 @@ Rust integration tests execute harmless commands in temporary directories and co
 - Stop and restart terminate the entire tracked process group immediately. Daemons that deliberately detach into a new session are outside that group and should be managed by their own service manager.
 - Bind errors that include a port or a standard --port/-p argument append the current port owner to the run log. Errors that omit the port cannot be diagnosed automatically. Port-owner lookup is also available beside detected listeners.
 - Native cloud providers, remote process management, tray/background persistence, auto-updates, signed distribution, advanced resource charts, and history paging/export are future work. No cloud credentials or remote APIs are required.
+
+## License
+
+[MIT NON-AI License](LICENSE). This custom, source-available license permits use, modification, and redistribution subject to its terms, but **prohibits all AI/ML use of the code**, including training, inference, AI integrations, and supplying the code to AI coding tools, unless separately authorized in writing by the applicable copyright holder(s). It is not the standard MIT License or an OSI-approved open-source license.
+
+Third-party components and assets retain their own licenses. Previously granted licenses are not retroactively revoked. See the license file for the full terms.

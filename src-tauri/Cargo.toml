@@ -1,4 +1,5 @@
 [package]
+license-file = "../LICENSE"
 name = "pit-boss"
 version = "0.1.0"
 description = "Run the house. A local developer command center."

@@ -27,11 +27,25 @@ pub struct GitInfo {
 pub struct Preset {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub command: String,
     pub cwd: String,
     pub category: String,
+    #[serde(default)]
+    pub icon: String,
     pub environment: String,
     pub confirmation: bool,
+    #[serde(default)]
+    pub confirmation_mode: String,
+    #[serde(default)]
+    pub dangerous: bool,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub sort_order: usize,
+    #[serde(default)]
+    pub keyboard_shortcut: String,
     pub persistent: bool,
     pub concurrent: bool,
     /// KEY -> inherited environment variable name. Values are never persisted.
@@ -48,6 +62,8 @@ pub struct Project {
     pub package_manager: String,
     pub git: GitInfo,
     pub commands: Vec<Preset>,
+    #[serde(default)]
+    pub suggestions: Vec<Preset>,
     pub favorite: bool,
     pub group: String,
     pub color: String,
