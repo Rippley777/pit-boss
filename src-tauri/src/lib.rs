@@ -1,5 +1,6 @@
 pub mod git;
 pub mod models;
+pub mod port_authority;
 pub mod ports;
 pub mod projects;
 pub mod runner;

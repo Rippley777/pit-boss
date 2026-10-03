@@ -44,6 +44,7 @@ npm run desktop:build
 - Project actions with descriptions, icons, category groups, pinned card controls, duplicate/edit/history management, production-aware safeguards, and per-project keyboard shortcuts. Pit Boss suggests actions from package scripts, build tools, and common script folders; suggestions remain disabled until explicitly added.
 - Real Rust shell execution with separate streaming stdout/stderr, duration, exit status, stop, restart, rerun, copy, and clear-visible-output controls.
 - Process-group tracking and termination, including children started by package managers. Listening ports and aggregate CPU/RSS are inspected with `ps` and `lsof` on macOS/Linux.
+- Automatic Port Authority detection. When its same-user Conflict Autopilot engine is running and enabled, Pit Boss loads the bundled shell helper for each launch so supported npm, pnpm, yarn, and bun `dev`/`start` commands can report conflicts without changing saved presets.
 - Staging and production targets as deployment presets; deployment history records branch, commit, environment, start/end, exit code, and output.
 - Concurrent group start/build/test/pull operations with individual sessions and aggregate active counts. Stop-all and Git-refresh actions are also available.
 - Git fetch/pull presets, repository links, commit copying, external terminal, editor, and browser actions.
@@ -62,6 +63,8 @@ The database stores the names only. Export the source variable in your shell and
 Known sensitive inherited variables (names containing SECRET, TOKEN, PASSWORD, API_KEY, PRIVATE_KEY, or CREDENTIAL) and all explicitly bound values are redacted before event delivery and persistence, even when split across reads. This is not a general-purpose data-loss prevention system: do not paste secrets into command text or print unrelated sensitive data. Environment files are detected by filename, never read into the UI.
 
 Commands can run arbitrary shell code with your user's permissions. Only saved project preset IDs are accepted by the runner. Working directories are canonicalized and must stay inside the registered project; symlink escapes are rejected. Imported commands require approval. Git metadata inspection disables filesystem-monitor hooks. Production confirmation is enforced in Rust as well as the UI. The desktop window uses a restricted content security policy and no remote content.
+
+Port Authority remains optional. Pit Boss looks for its configured executable, standard application locations, or the process serving Port Authority's private same-user Autopilot socket. It activates the shell helper only after that socket confirms Conflict Autopilot is enabled; a missing, closed, disabled, or incompatible Port Authority installation leaves command execution unchanged.
 
 ## Persistence
 

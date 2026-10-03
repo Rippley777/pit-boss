@@ -74,7 +74,7 @@ test("production safeguards and command preset persistence", async ({
     dialog.getByRole("button", { name: "Confirm & run" }),
   ).toBeDisabled();
   await dialog
-    .getByRole("textbox", { name: "Production confirmation" })
+    .getByRole("textbox", { name: "Action confirmation" })
     .fill("Shipwreck");
   await expect(
     dialog.getByRole("button", { name: "Confirm & run" }),
@@ -82,12 +82,12 @@ test("production safeguards and command preset persistence", async ({
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await page
     .locator(".page-tabs")
-    .getByRole("button", { name: "Commands", exact: true })
+    .getByRole("button", { name: "Actions", exact: true })
     .click();
-  await page.getByRole("button", { name: "Add command", exact: true }).click();
+  await page.getByRole("button", { name: "Add action", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill("Check health");
   await page.getByLabel("Command", { exact: true }).fill("echo healthy");
-  await page.getByRole("button", { name: "Save preset" }).click();
+  await page.getByRole("button", { name: "Save action" }).click();
   await expect(
     page.locator(".command-row").filter({ hasText: "Check health" }),
   ).toContainText("echo healthy");
@@ -104,13 +104,25 @@ test("palette keyboard navigation and honest desktop-only registration", async (
   await page.keyboard.press("Control+k");
   await page
     .getByRole("textbox", { name: "Search commands" })
-    .fill("Tests · Repo Reaper");
+    .fill("Repo Reaper · Tests");
   await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog")).toContainText("cargo test");
   await page.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Add project", exact: true }).click();
   await page.getByRole("button", { name: "Inspect", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("desktop app");
+});
+
+test("reports Port Authority integration status honestly", async ({ page }) => {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const integration = page.locator(".panel").filter({
+    has: page.getByRole("heading", { name: "Port Authority" }),
+  });
+  await expect(integration).toContainText("Conflict Autopilot");
+  await expect(integration).toContainText("Not found");
+  await expect(integration).toContainText(
+    "detection is available in the desktop app",
+  );
 });
 
 test("renders without console errors and stays within narrow viewport", async ({

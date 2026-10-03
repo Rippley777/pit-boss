@@ -145,6 +145,13 @@ export function createDemo(): Snapshot {
   }
   return {
     projects,
+    portAuthority: {
+      installed: false,
+      autopilotEnabled: false,
+      ready: false,
+      binaryPath: null,
+      detail: "Port Authority detection is available in the desktop app.",
+    },
     runs: [
       run(
         0,

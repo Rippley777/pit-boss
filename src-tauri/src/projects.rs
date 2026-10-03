@@ -266,12 +266,11 @@ pub fn suggestions(project: &Project) -> Result<Vec<Preset>, String> {
     let root = resolve(&project.path)?;
     let detected = detect(&project.path)?;
     let mut candidates = detected.commands;
-    if let Ok(makefile) = fs::read_to_string(
-        root.join("Makefile")
-            .exists()
-            .then_some("Makefile")
-            .unwrap_or("makefile"),
-    ) {
+    if let Ok(makefile) = fs::read_to_string(if root.join("Makefile").exists() {
+        "Makefile"
+    } else {
+        "makefile"
+    }) {
         for line in makefile.lines() {
             let Some((target, _)) = line.split_once(':') else {
                 continue;
@@ -379,8 +378,7 @@ pub fn suggestions(project: &Project) -> Result<Vec<Preset>, String> {
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
-                .replace('-', " ")
-                .replace('_', " ");
+                .replace(['-', '_'], " ");
             let name = stem
                 .split_whitespace()
                 .map(|s| {

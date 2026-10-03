@@ -98,4 +98,15 @@ pub struct Run {
 pub struct Snapshot {
     pub projects: Vec<Project>,
     pub runs: Vec<Run>,
+    pub port_authority: PortAuthorityStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortAuthorityStatus {
+    pub installed: bool,
+    pub autopilot_enabled: bool,
+    pub ready: bool,
+    pub binary_path: Option<String>,
+    pub detail: String,
 }

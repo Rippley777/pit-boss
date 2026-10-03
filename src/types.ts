@@ -79,6 +79,14 @@ export interface Run {
 export interface Snapshot {
   projects: Project[];
   runs: Run[];
+  portAuthority: PortAuthorityStatus;
+}
+export interface PortAuthorityStatus {
+  installed: boolean;
+  autopilotEnabled: boolean;
+  ready: boolean;
+  binaryPath: string | null;
+  detail: string;
 }
 export type Page =
   | "The Pit"

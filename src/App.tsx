@@ -69,7 +69,17 @@ const navigation = [
   { name: "Activity", icon: Activity },
 ] as const;
 export default function App() {
-  const [data, setData] = useState<Snapshot>({ projects: [], runs: [] }),
+  const [data, setData] = useState<Snapshot>({
+      projects: [],
+      runs: [],
+      portAuthority: {
+        installed: false,
+        autopilotEnabled: false,
+        ready: false,
+        binaryPath: null,
+        detail: "Checking Port Authority…",
+      },
+    }),
     [loading, setLoading] = useState(true),
     [page, setPage] = useState<Page>("The Pit"),
     [projectId, setProjectId] = useState<string | null>(null),
@@ -189,6 +199,7 @@ export default function App() {
       setData((d) => ({
         projects: next.projects,
         runs: mergeRuns(d.runs, next.runs),
+        portAuthority: next.portAuthority,
       }));
     } catch (e) {
       notify(String(e), true);
@@ -1506,6 +1517,37 @@ export default function App() {
                             Avoid putting secrets directly in command text.
                             Commands can print data Pit Boss cannot identify as
                             sensitive.
+                          </p>
+                        </div>
+                        <div className="panel">
+                          <SectionHeading title="Port Authority" />
+                          <div className="integration-info">
+                            <Network size={22} />
+                            <div>
+                              <h3>Conflict Autopilot</h3>
+                              <p>{data.portAuthority.detail}</p>
+                            </div>
+                            <span
+                              className={`tag ${data.portAuthority.ready ? "integration-active" : ""}`}
+                            >
+                              {data.portAuthority.ready
+                                ? "Active"
+                                : data.portAuthority.installed
+                                  ? "Installed"
+                                  : "Not found"}
+                            </span>
+                          </div>
+                          {data.portAuthority.binaryPath && (
+                            <code className="integration-path">
+                              {data.portAuthority.binaryPath}
+                            </code>
+                          )}
+                          <p className="muted settings-copy">
+                            Pit Boss checks the private, same-user Autopilot
+                            socket before every launch. When active, only
+                            supported dev/start commands are handed to Port
+                            Authority; all other commands keep their normal
+                            behavior.
                           </p>
                         </div>
                       </div>

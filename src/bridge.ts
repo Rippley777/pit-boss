@@ -14,6 +14,13 @@ try {
 function upgrade(snapshot: Snapshot): Snapshot {
   return {
     ...snapshot,
+    portAuthority: snapshot.portAuthority || {
+      installed: false,
+      autopilotEnabled: false,
+      ready: false,
+      binaryPath: null,
+      detail: "Port Authority detection is available in the desktop app.",
+    },
     projects: snapshot.projects.map((p) => ({
       ...p,
       suggestions: p.suggestions || [],

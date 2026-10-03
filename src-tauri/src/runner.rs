@@ -1,4 +1,4 @@
-use crate::{git, models::*, ports, projects, storage::Storage};
+use crate::{git, models::*, port_authority, ports, projects, storage::Storage};
 use std::{
     collections::HashMap,
     process::Stdio,
@@ -39,7 +39,11 @@ impl Runner {
             }
         }
         runs.sort_by_key(|r| std::cmp::Reverse(r.started_at));
-        Ok(Snapshot { projects, runs })
+        Ok(Snapshot {
+            projects,
+            runs,
+            port_authority: port_authority::status(),
+        })
     }
     pub async fn start(
         self: &Arc<Self>,
@@ -125,11 +129,20 @@ impl Runner {
             );
         }
         #[cfg(unix)]
+        let integration = port_authority::command_integration(&preset.command);
+        #[cfg(unix)]
         let mut cmd = {
-            let mut c = Command::new("/bin/sh");
-            c.args(["-c", &preset.command]);
+            let (shell, script) = integration
+                .as_ref()
+                .map(|integration| (integration.shell.as_os_str(), integration.script.as_str()))
+                .unwrap_or_else(|| (std::ffi::OsStr::new("/bin/sh"), preset.command.as_str()));
+            let mut c = Command::new(shell);
+            c.args(["-c", script]);
             if let Some(path) = shell_path {
                 c.env("PATH", path);
+            }
+            if let Some(integration) = &integration {
+                c.env("PORT_AUTHORITY_BIN", &integration.binary);
             }
             c.process_group(0);
             c

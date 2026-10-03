@@ -2164,6 +2164,46 @@ kbd {
   color: #7c919f;
   margin-top: 7px;
 }
+.integration-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 12px 0;
+}
+.integration-info > svg {
+  color: #9caf88;
+  margin-top: 1px;
+}
+.integration-info > div {
+  flex: 1;
+}
+.integration-info h3 {
+  font-size: 12px;
+  font-weight: 500;
+}
+.integration-info p {
+  color: #7c919f;
+  font-size: 10px;
+  line-height: 1.6;
+  margin-top: 7px;
+}
+.integration-info .integration-active {
+  color: var(--lime);
+  border-color: #60764e;
+  background: #293323;
+}
+.integration-path {
+  display: block;
+  overflow: hidden;
+  padding: 9px 10px;
+  border: 1px solid #303a43;
+  background: #14191c;
+  color: #82938d;
+  font-size: 9px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .settings-copy {
   font-size: 11px;
   margin: 18px 0;
