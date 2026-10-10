@@ -12,6 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  runner,
+  outputSanitizer,
   IDENTITY,
   TEAM,
   archiveArtifacts,
@@ -182,4 +184,45 @@ test("interrupted promotion recovers previous directory", async (t) => {
   });
   await recoverPromotion(root);
   assert.equal(await readFile(join(root, "current/old.dmg"), "utf8"), "old");
+});
+
+test("release output streams partial lines without exposing split secrets", async (t) => {
+  const root = await fixture(t);
+  let logged = "",
+    visible = "";
+  const run = runner(
+    root,
+    {
+      async write(text) {
+        logged += text;
+      },
+    },
+    {
+      write(text) {
+        visible += text;
+        return true;
+      },
+    },
+  );
+  const result = await run(
+    process.execPath,
+    [
+      "-e",
+      "process.stdout.write('first super-');setTimeout(()=>{process.stdout.write('secret ✓');process.stderr.write('diagnostic')},40)",
+    ],
+    { env: { ...process.env, TEST_SECRET: "super-secret" } },
+  );
+  assert.ok(result.includes("super-secret")); // Private diagnostic return; never delivered to UI or log without redaction.
+  assert.ok(visible.includes("[REDACTED]"));
+  assert.ok(logged.includes("[REDACTED]"));
+  assert.ok(visible.includes("✓"));
+  assert.ok(!visible.includes("super-secret"));
+  assert.ok(!logged.includes("super-secret"));
+});
+test("release output sanitizer flushes unrelated partial lines immediately", () => {
+  const emit = outputSanitizer({ SECRET: "abcdef" });
+  assert.equal(emit("working "), "working ");
+  assert.equal(emit("abc"), "");
+  assert.equal(emit("def done"), "[REDACTED] done");
+  assert.equal(emit("", true), "");
 });

@@ -12,10 +12,10 @@ import {
   ShieldCheck,
   Terminal,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, isDesktop } from "../bridge";
 import { preset as makePreset } from "../demo";
-import type { Preset, Project, RunRequest } from "../types";
+import type { Preset, Project, Run, RunRequest } from "../types";
 import { Modal, ProjectIcon, Shortcut } from "./ui";
 export function RunDialog({
   requests,
@@ -28,14 +28,87 @@ export function RunDialog({
 }) {
   const [typed, setTyped] = useState(""),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [prepared, setPrepared] = useState<Run[]>([]),
+    [warnings, setWarnings] = useState(false),
+    [attempt, setAttempt] = useState(0);
+  const generation = useRef(0);
+  const preparation = useRef<{
+    requests: RunRequest[];
+    attempt: number;
+    promise: Promise<Run[]>;
+    submitted: boolean;
+  } | null>(null);
+  useEffect(() => {
+    const token = ++generation.current;
+    if (
+      !preparation.current ||
+      preparation.current.requests !== requests ||
+      preparation.current.attempt !== attempt
+    ) {
+      preparation.current = {
+        requests,
+        attempt,
+        submitted: false,
+        promise: Promise.allSettled(
+          requests.map(({ project, preset, retryOf }) =>
+            api.prepare(project.id, preset.id, retryOf),
+          ),
+        ).then(async (results) => {
+          const runs = results.flatMap((result) =>
+            result.status === "fulfilled" ? [result.value] : [],
+          );
+          const failure = results.find(
+            (result) => result.status === "rejected",
+          );
+          if (failure?.status === "rejected") {
+            await Promise.allSettled(runs.map((run) => api.stop(run.id)));
+            throw failure.reason;
+          }
+          return runs;
+        }),
+      };
+    }
+    const task = preparation.current;
+    setPrepared([]);
+    setWarnings(false);
+    setError("");
+    void task.promise
+      .then((runs) => {
+        if (generation.current === token) setPrepared(runs);
+      })
+      .catch((e) => {
+        if (generation.current === token) setError(String(e));
+      });
+    return () => {
+      // A StrictMode effect replay reuses the same request rather than creating an extra execution.
+      void task.promise
+        .then((runs) => {
+          if (
+            !task.submitted &&
+            (generation.current === token || preparation.current !== task)
+          )
+            runs.forEach((run) => {
+              void api.stop(run.id).catch(() => {});
+            });
+        })
+        .catch(() => {});
+    };
+  }, [requests, attempt]);
   const protectedActions = requests.filter(
-    ({ preset }) =>
+    ({ preset }, index) =>
       preset.dangerous ||
       preset.environment.toLowerCase() === "production" ||
       preset.confirmation ||
-      preset.confirmationMode === "Always",
+      preset.confirmationMode === "Always" ||
+      ["destructive", "production_critical"].includes(
+        prepared[index]?.details?.risk || "",
+      ),
   );
+  const hasWarnings = prepared.some((r) =>
+    r.details?.preflight.some((c) => c.result === "warning"),
+  );
+  const blocked = prepared.some((r) => r.status === "failed");
   const required = [
     ...new Set(protectedActions.map(({ project }) => project.name)),
   ].join(", ");
@@ -56,7 +129,7 @@ export function RunDialog({
       onClose={onClose}
     >
       <div className="run-review-list">
-        {requests.map(({ project, preset, restart }) => (
+        {requests.map(({ project, preset, restart }, index) => (
           <div className="run-review" key={`${project.id}-${preset.id}`}>
             <div className="run-review-title">
               <ProjectIcon project={project} small />
@@ -74,11 +147,50 @@ export function RunDialog({
             {preset.description && (
               <p className="review-description">{preset.description}</p>
             )}
-            <code>$ {preset.command}</code>
+            <code>
+              $ {prepared[index]?.command || "Preparing sanitized command…"}
+            </code>
             <div className="review-path">
               <Terminal size={13} />
               {preset.cwd ? `${project.path}/${preset.cwd}` : project.path}
             </div>
+            <p className="form-hint">
+              Risk:{" "}
+              {prepared[index]?.details?.risk.replaceAll("_", " ") ||
+                "Evaluating…"}{" "}
+              · Shell execution
+            </p>
+            <p className="form-hint">
+              Impact:{" "}
+              {preset.policy?.impact ||
+                "Runs with your user permissions. Review the command for filesystem and external side effects."}
+            </p>
+            <p className="form-hint">
+              Rollback:{" "}
+              {preset.policy?.rollback ||
+                "Not declared; automatic rollback is not guaranteed."}
+            </p>
+            <div className="preflight-results" aria-label="Preflight results">
+              {prepared[index]?.details?.preflight.map((check) => (
+                <div
+                  key={check.id}
+                  className={`preflight-check ${check.result}`}
+                >
+                  <strong>
+                    {check.result.toUpperCase()} · {check.description}
+                  </strong>
+                  <span>{check.explanation}</span>
+                  {["warning", "blocked"].includes(check.result) && (
+                    <span>{check.resolution}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            {prepared[index]?.details?.failure && (
+              <p role="alert" className="form-error">
+                {prepared[index].details!.failure!.summary}
+              </p>
+            )}
             {Object.keys(preset.env).length > 0 && (
               <div className="review-env">
                 Environment: {Object.keys(preset.env).join(", ")}{" "}
@@ -113,6 +225,27 @@ export function RunDialog({
           </div>
         </div>
       )}
+      {hasWarnings && (
+        <label className="warning-override">
+          <input
+            type="checkbox"
+            checked={warnings}
+            onChange={(e) => setWarnings(e.target.checked)}
+          />
+          I reviewed these warnings and approve proceeding.
+        </label>
+      )}
+      {prepared.length < requests.length && !error && (
+        <p role="status">Running read-only preflight checks…</p>
+      )}
+      {(blocked || error) && (
+        <button
+          className="button secondary"
+          onClick={() => setAttempt((a) => a + 1)}
+        >
+          Recheck preflight
+        </button>
+      )}
       {error && <p className="form-error">{error}</p>}
       <div className="modal-footer">
         <button className="button secondary" onClick={onClose} disabled={busy}>
@@ -120,11 +253,28 @@ export function RunDialog({
         </button>
         <button
           className="button primary"
-          disabled={busy || (!!required && typed !== required)}
+          disabled={
+            busy ||
+            blocked ||
+            prepared.length !== requests.length ||
+            (hasWarnings && !warnings) ||
+            (!!required && typed !== required)
+          }
           onClick={async () => {
             setBusy(true);
             try {
-              await onConfirm(requests);
+              if (preparation.current) preparation.current.submitted = true;
+              await onConfirm(
+                requests.map((request, index) => ({
+                  ...request,
+                  prepared: prepared[index],
+                  warnings,
+                  confirmation: protectedActions.includes(request)
+                    ? request.project.name
+                    : "run",
+                })),
+              );
+
               onClose();
             } catch (e) {
               setError(String(e));
@@ -392,8 +542,27 @@ export function CommandDialog({
               ...form,
               name: form.name.trim(),
               command: form.command.trim(),
-              category: (form.category.trim() || "Custom") as Preset["category"],
+              category: (form.category.trim() ||
+                "Custom") as Preset["category"],
               env: bindings,
+              policy: {
+                ...form.policy,
+                ...Object.fromEntries(
+                  (
+                    [
+                      "requiredTools",
+                      "requiredFiles",
+                      "requiredEnv",
+                      "expectedArtifacts",
+                    ] as const
+                  ).map((key) => [
+                    key,
+                    (form.policy?.[key] || [])
+                      .map((v) => v.trim())
+                      .filter(Boolean),
+                  ]),
+                ),
+              },
               confirmation: form.confirmationMode === "Always",
               sortOrder: command?.sortOrder ?? project.commands.length,
             };
@@ -586,6 +755,132 @@ export function CommandDialog({
           Values are inherited from your desktop launch environment and redacted
           from captured output.
         </p>
+        <details className="execution-policy">
+          <summary>Execution safety and preflight</summary>
+          <label className="field-label" htmlFor="action-risk">
+            Risk level
+          </label>
+          <select
+            id="action-risk"
+            value={form.policy?.risk || ""}
+            onChange={(e) =>
+              field("policy", {
+                ...form.policy,
+                risk: e.target.value as NonNullable<Preset["policy"]>["risk"],
+              })
+            }
+          >
+            <option value="">Caution (default)</option>
+            <option value="safe">Safe</option>
+            <option value="caution">Caution</option>
+            <option value="destructive">Destructive</option>
+            <option value="production_critical">Production critical</option>
+          </select>
+          <label className="field-label" htmlFor="action-concurrency">
+            Concurrency
+          </label>
+          <select
+            id="action-concurrency"
+            value={form.policy?.concurrency || ""}
+            onChange={(e) =>
+              field("policy", {
+                ...form.policy,
+                concurrency: e.target.value as NonNullable<
+                  Preset["policy"]
+                >["concurrency"],
+              })
+            }
+          >
+            <option value="">Use action default</option>
+            <option value="parallel">Allow parallel</option>
+            <option value="action">One per action</option>
+            <option value="project">One per project</option>
+            <option value="deployment">Exclusive deployment target</option>
+            <option value="global">Global exclusive</option>
+          </select>
+          <label className="field-label" htmlFor="action-timeout">
+            Timeout in seconds (0 means none)
+          </label>
+          <input
+            id="action-timeout"
+            type="number"
+            min="0"
+            max="604800"
+            value={form.policy?.timeoutSeconds || 0}
+            onChange={(e) =>
+              field("policy", {
+                ...form.policy,
+                timeoutSeconds: Number(e.target.value),
+              })
+            }
+          />
+          {(
+            [
+              ["requiredTools", "Required tools"],
+              ["requiredFiles", "Required files or scripts"],
+              ["requiredEnv", "Required environment names"],
+              [
+                "expectedArtifacts",
+                "Expected artifacts (backed up before overwrite)",
+              ],
+            ] as const
+          ).map(([key, label]) => (
+            <div key={key}>
+              <label className="field-label" htmlFor={`policy-${key}`}>
+                {label} · one per line
+              </label>
+              <textarea
+                id={`policy-${key}`}
+                rows={2}
+                value={(form.policy?.[key] || []).join("\n")}
+                onChange={(e) =>
+                  field("policy", {
+                    ...form.policy,
+                    [key]: e.target.value.split("\n"),
+                  })
+                }
+              />
+            </div>
+          ))}
+          {(
+            [
+              ["deploymentBranch", "Required deployment branch"],
+              ["impact", "Potential impact / affected resources"],
+              ["rollback", "Rollback or backup instructions"],
+            ] as const
+          ).map(([key, label]) => (
+            <div key={key}>
+              <label className="field-label" htmlFor={`policy-${key}`}>
+                {label}
+              </label>
+              <input
+                id={`policy-${key}`}
+                value={form.policy?.[key] || ""}
+                onChange={(e) =>
+                  field("policy", { ...form.policy, [key]: e.target.value })
+                }
+              />
+            </div>
+          ))}
+          <label className="warning-override">
+            <input
+              type="checkbox"
+              checked={form.policy?.denyWarnings || false}
+              onChange={(e) =>
+                field("policy", {
+                  ...form.policy,
+                  denyWarnings: e.target.checked,
+                })
+              }
+            />
+            Block execution on warnings
+          </label>
+          <p className="form-hint">
+            Production always requires typed confirmation and exclusive
+            deployment scheduling. Existing release scripts retain their own
+            platform, authentication and backup checks.
+          </p>
+        </details>
         <label className="field-label" htmlFor="confirmation-mode">
           Confirmation
         </label>

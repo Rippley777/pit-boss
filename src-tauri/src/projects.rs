@@ -42,6 +42,7 @@ fn preset(name: &str, cmd: &str, category: &str) -> Preset {
         persistent: category == "Development",
         concurrent: false,
         env: BTreeMap::new(),
+        policy: Default::default(),
     }
 }
 fn action_label(name: &str) -> String {

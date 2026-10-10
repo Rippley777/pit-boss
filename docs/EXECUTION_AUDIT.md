@@ -1,0 +1,49 @@
+# Execution audit — 2026-10-08
+
+Inspected AGENTS.md, README.md, docs/ECOSYSTEM.md, MACOS_RELEASE.md, Rust models/storage/runner/project detection/IPC, React bridge/dialogs/terminal/history, Tauri capability and CSP configuration, release scripts/store/CI and existing Rust, Playwright and Node tests before implementation.
+
+| Capability               | Status before changes | Existing implementation                                           | Required changes                                                      |
+| ------------------------ | --------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Command execution        | Existing              | src-tauri/src/runner.rs, lib.rs                                   | Persist preparation and spawn failures, explicit transitions, timeout |
+| Custom actions           | Existing              | projects.rs, models.rs, Dialogs.tsx                               | Declarative policy, retain saved preset IDs                           |
+| Preflight checks         | Partial               | runner.rs, scripts/macos-release.mjs                              | Structured persisted checks and review                                |
+| Live stdout/stderr       | Existing              | runner.rs, Terminal.tsx                                           | Timestamp chunks, search/export, safe formatting                      |
+| Execution cancellation   | Partial               | runner.rs                                                         | Graceful termination then escalation; confirmed outcome               |
+| Failure reporting        | Partial               | runner.rs, ports.rs                                               | Conservative categories, evidence and next steps                      |
+| Execution history        | Existing              | storage.rs, ProjectDetail.tsx                                     | Retry links, retention and richer details                             |
+| Destructive confirmation | Partial               | runner.rs, Dialogs.tsx                                            | Expiring approval bound to exact saved configuration                  |
+| Release backups          | Existing              | scripts/macos-release.mjs, macos-release-store.mjs                | Preserve verified archive/promotion; expected artifact references     |
+| Deck integration         | Missing               | No Deck execution API/deep link or authentication contract exists | Keep remote execution unavailable; no unauthenticated shell API       |
+
+The existing single shell runner serves all saved actions, including package/release scripts. SQLite stores JSON records, not a separate ORM schema. Output has a 1 MiB tail, streaming secret redaction, UTF-8 boundary handling, 100 ms event coalescing and periodic checkpoints. Current history loads 500 records but previously never pruned storage. Recovery only handled running state. Confirmation used project name without a request/configuration binding. Stop sent immediate SIGKILL. Spawn/preflight failures lacked history entries. Release scripts already verify archived copies, preserve last good releases, lock concurrent releases, validate actual architectures/signing/notarization and journal promotion.
+
+No cross-application implementation changes: Pit Boss continues to own actions, logs and execution records. Deck remains independent. No remote transport, shared database, events or deployment-order requirement is introduced. Existing Port Authority and browser-only House Edge integration remain in place. Native platform packaging must be validated on its respective host; macOS cannot validate Windows/Linux packages.
+
+## Implementation and compatibility
+
+The existing runner now persists `queued → preflighting → awaiting_confirmation → starting → running` and terminal outcomes. The legacy wire value `success` remains compatible and is displayed as **Succeeded**; new cancellation is `cancelled`, with old `stopped` records still readable. Zero exit is insufficient when declared artifact verification or durable history persistence fails. Nonterminal records recover as Interrupted with an explanation.
+
+`prepare_execution` performs read-only checks and returns the sanitized execution record. `run_command` consumes a single-use execution ID, requires explicit warning approval and any typed confirmation, expires after five minutes, and compares the reviewed project/action with the saved configuration. Retry prepares a new record linked to its predecessor. Commands remain explicitly saved shell scripts (`/bin/sh -c` on Unix, `cmd.exe /C` on Windows); no additional runner or remote shell API is introduced.
+
+Action `policy` is optional and backward-compatible. The action editor exposes risk, concurrency, timeout (seconds; zero disables it), required tool names, required file paths, required environment **names**, expected artifact paths, deployment branch, warning policy, impact and rollback instructions. Unknown actions default to Caution. Production requires typed confirmation and exclusive target scheduling. Explicit global exclusivity remains stronger. Tool availability uses the desktop login PATH, and simple package scripts are inspected without executing them. Complex shell syntax is not treated as proof that prerequisites exist.
+
+Declared existing artifacts receive a verified copy in `<working-directory>/.pit-boss-backups/<request-timestamp>-<execution-id>/` before launch. Backup failure blocks launch; originals and partial backups remain. Generic backups refuse symlinks and special files. Use the existing macOS release helper for app bundles and their symlinks, signature/notarization checks, platform validation, SHA-256 manifests and promotion. A release action without generic artifact declarations retains that helper's own safeguards; its paths and manifests appear in script output. Do not declare broad source directories as build outputs. Generic verification records observed paths and byte sizes, not invented checksums or platform success.
+
+History retains 500 completed executions by default (configurable from 50 to 5,000 in Runs), plus all nonterminal records. Each record retains a 1 MiB sanitized text tail and a separately bounded recent timestamp/stream index (1,000 events / 128 KiB). Earlier output is explicitly labeled unavailable after truncation. Retention removes complete old records and their logs together; missing retry references are labeled unavailable. The UI loads up to 500 recent records and bounds live state; filtering/search covers that loaded window. Native log export uses the existing native dialog plugin and exports only the retained sanitized output. The database reuses freed SQLite pages rather than vacuuming during execution.
+
+Cancellation sends graceful termination, waits two seconds, escalates, and waits for exit. Unix process groups cover ordinary child processes. Detached sessions remain outside that boundary. Pipe read failures, unconfirmed exit or pipes held beyond the drain deadline produce Interrupted rather than success. Restart and retry never reuse authorization. Structured diagnoses use recognized evidence; unknown failures retain an explicit unknown cause. No AI provider is contacted.
+
+## Deliberate boundaries
+
+- Deck/automation invocation remains unavailable because there is no existing authenticated execution transport or ecosystem identity contract. No remote caller can submit arbitrary commands or bypass local review. Manual requests receive correlation IDs and source metadata for traceability. No integration or shared-domain architecture changed.
+- Arbitrary preflight commands are not supported. Provider authentication, runtime-version compatibility and cross-platform packaging are delegated to existing project/release checks when not safely inferable; skipped checks are not reported as passes. No cloud deployment was performed during validation.
+- Build output is a bounded streaming viewer, not a PTY. SGR foreground colors are allowed; other terminal controls and active links are discarded. Windows process-tree handling and Linux/Windows packaging require testing on those operating systems. Windows cancellation conservatively reports Interrupted until a process-tree boundary can be verified.
+- Generic retries cannot promise idempotency of user shell commands. The details view instructs users to inspect partial side effects and backups before retrying.
+
+## Validation results
+
+- Native Rust suite: 31 passing tests, including real harmless processes in temporary directories, preflight blocks, review expiry/configuration changes, warning overrides, process-tree cancellation, timeout, artifacts/backups, redaction, bounded output, retries, retention and restart recovery.
+- Browser suite: 12 passing tests, including successful build/retry/history/export and failed-execution evidence rendering. Browser scenarios remain clearly labeled simulations; real process behavior is exercised by Rust tests.
+- Release suite: 11 passing tests covering archive corruption, failed/interrupted promotion, production verification requirements, architecture checks and streaming redaction. Nested release subprocesses now stream sanitized stdout/stderr while preserving full sanitized release logs and bounding the diagnostic return buffer.
+- TypeScript production build, Rust formatter and Clippy with warnings denied, and native macOS application build pass. Execution detail screenshot inspected at `test-results/execution-failure.png`.
+- Previous native app and executable were copied and verified with the existing archive helper under `macos-releases/archive/execution-validation-2026-10-08T20-50-16.117Z` before the validation build. No signed production promotion, cloud deployment, or Windows/Linux packaging was performed.

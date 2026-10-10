@@ -1,3 +1,4 @@
+pub mod execution;
 pub mod git;
 pub mod models;
 pub mod port_authority;
@@ -56,6 +57,7 @@ mod desktop {
         let mut ids = std::collections::HashSet::new();
         let mut shortcuts = std::collections::HashSet::new();
         for command in project.commands.iter().chain(project.suggestions.iter()) {
+            execution::validate_policy(command)?;
             if command.name.trim().is_empty()
                 || command.command.trim().is_empty()
                 || !ids.insert(&command.id)
@@ -95,6 +97,7 @@ mod desktop {
         for (sort_order, action) in project.suggestions.iter_mut().enumerate() {
             action.sort_order = sort_order;
         }
+        let _reservation = state.active.lock().map_err(|e| e.to_string())?;
         state.store.save_project(&project)?;
         Ok(project)
     }
@@ -125,16 +128,75 @@ mod desktop {
         .map_err(|e| e.to_string())?
     }
     #[tauri::command]
-    async fn run_command(
+    async fn prepare_execution(
         state: State<'_, AppState>,
         project_id: String,
         preset_id: String,
+        retry_of: Option<String>,
+    ) -> Result<Run, String> {
+        state.prepare(&project_id, &preset_id, retry_of).await
+    }
+    #[tauri::command]
+    async fn run_command(
+        state: State<'_, AppState>,
+        execution_id: String,
         confirmation: String,
+        warnings: bool,
     ) -> Result<Run, String> {
         state
             .inner()
-            .start(&project_id, &preset_id, &confirmation)
+            .confirm(&execution_id, &confirmation, warnings)
             .await
+    }
+    #[tauri::command]
+    fn history_retention(state: State<AppState>, count: Option<usize>) -> Result<usize, String> {
+        if let Some(count) = count {
+            state.store.set_retention(count)?;
+        }
+        Ok(state.store.retention())
+    }
+    #[tauri::command]
+    async fn export_execution(
+        app: tauri::AppHandle,
+        state: State<'_, AppState>,
+        run_id: String,
+    ) -> Result<Option<String>, String> {
+        use tauri_plugin_dialog::DialogExt;
+        let live = state
+            .active
+            .lock()
+            .map_err(|e| e.to_string())?
+            .get(&run_id)
+            .map(|active| active.run.clone());
+        let run = live
+            .or(state.store.run(&run_id)?)
+            .ok_or("Execution log is no longer available (retention may have removed it)")?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let Some(file) = app
+                .dialog()
+                .file()
+                .set_file_name(format!("pit-boss-{}.log", run.id))
+                .add_filter("Log", &["log", "txt"])
+                .blocking_save_file()
+            else {
+                return Ok(None);
+            };
+            let path = file.into_path().map_err(|e| e.to_string())?;
+            // Destination comes exclusively from the native user-controlled save dialog.
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&path)
+                .map_err(|e| e.to_string())?;
+            use std::io::Write;
+            file.write_all(execution::plain_log(&run.output).as_bytes())
+                .and_then(|_| file.sync_all())
+                .map_err(|e| e.to_string())?;
+            Ok(Some(path.display().to_string()))
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
     #[tauri::command]
     async fn stop_command(state: State<'_, AppState>, run_id: String) -> Result<(), String> {
@@ -254,6 +316,9 @@ mod desktop {
                 save_project,
                 remove_project,
                 refresh_projects,
+                prepare_execution,
+                history_retention,
+                export_execution,
                 run_command,
                 stop_command,
                 port_owner,

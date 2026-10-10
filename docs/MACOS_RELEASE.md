@@ -45,7 +45,7 @@ The release-only Tauri configuration merges with the application's existing conf
 - `macos-releases/archive/<timestamp-id>/`: previous distributables with verified copies, source paths and checksums.
 - `macos-releases/candidates/<timestamp-id>/`: signing-only builds; **not approved for distribution**.
 - `macos-releases/staging/<timestamp-id>/`: partial builds retained on failure; never promoted.
-- `macos-releases/logs/`: full logs with credential values redacted; console output reports phases and failures.
+- `macos-releases/logs/`: full logs with credential values redacted; console output streams sanitized stdout/stderr as well as phases and failures. Split credentials are redacted across output chunks, and diagnostic return buffers are bounded.
 
 Before building, the helper discovers existing artifacts in legacy `builds/current`, `releases/current`, its own `current`, and Cargo's native/target-specific debug/release bundle directories. It also preserves desktop executable outputs. It archives only distributables and manifests, never entire `target`, `node_modules` or compiler caches. Archive checks compare contents, permissions and symlinks before any bundle directory is removed. New builds are not included in their own history. Compiler caches are reused to limit disk usage. Do not run another native build or legacy release command concurrently in the same checkout.
 

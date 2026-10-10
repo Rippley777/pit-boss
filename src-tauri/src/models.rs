@@ -50,6 +50,8 @@ pub struct Preset {
     pub concurrent: bool,
     /// KEY -> inherited environment variable name. Values are never persisted.
     pub env: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub policy: ExecutionPolicy,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,6 +94,8 @@ pub struct Run {
     pub ports: Vec<u16>,
     pub cpu: f64,
     pub memory: u64,
+    #[serde(default)]
+    pub details: ExecutionDetails,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,4 +113,128 @@ pub struct PortAuthorityStatus {
     pub ready: bool,
     pub binary_path: Option<String>,
     pub detail: String,
+}
+
+/// Optional declarations are approved with the saved action, never loaded from repository metadata.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExecutionPolicy {
+    pub risk: String,
+    pub concurrency: String,
+    pub timeout_seconds: u64,
+    pub required_files: Vec<String>,
+    pub required_tools: Vec<String>,
+    pub required_env: Vec<String>,
+    pub expected_artifacts: Vec<String>,
+    pub deployment_branch: String,
+    pub deny_warnings: bool,
+    pub impact: String,
+    pub rollback: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExecutionDetails {
+    pub revision: u64,
+    pub transitions: Vec<Transition>,
+    pub preflight: Vec<PreflightCheck>,
+    pub risk: String,
+    pub trigger_source: String,
+    pub correlation_id: String,
+    pub retry_of: Option<String>,
+    pub confirmation: Option<Confirmation>,
+    pub failure: Option<Failure>,
+    pub signal: Option<i32>,
+    pub duration_ms: Option<u64>,
+    pub process_started_at: Option<u64>,
+    pub log_reference: String,
+    pub log_truncated: bool,
+    pub output_events: Vec<OutputEvent>,
+    pub artifacts: Vec<Artifact>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Transition {
+    pub state: String,
+    pub at: u64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflightCheck {
+    pub id: String,
+    pub description: String,
+    pub result: String,
+    pub explanation: String,
+    pub resolution: String,
+    pub duration_ms: u64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Confirmation {
+    pub at: u64,
+    pub expires_at: u64,
+    pub warning_overrides: Vec<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Failure {
+    pub category: String,
+    pub summary: String,
+    pub evidence: String,
+    pub next_step: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputEvent {
+    pub at: u64,
+    pub stream: String,
+    pub text: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Artifact {
+    pub path: String,
+    pub size: u64,
+}
+
+pub fn is_active(status: &str) -> bool {
+    matches!(
+        status,
+        "queued" | "preflighting" | "awaiting_confirmation" | "starting" | "running"
+    )
+}
+impl Run {
+    pub fn transition(&mut self, state: &str) -> Result<(), String> {
+        let allowed = match self.status.as_str() {
+            "queued" => matches!(state, "preflighting" | "cancelled" | "interrupted"),
+            "preflighting" => matches!(state, "awaiting_confirmation" | "failed" | "interrupted"),
+            "awaiting_confirmation" => {
+                matches!(state, "starting" | "failed" | "cancelled" | "interrupted")
+            }
+            "starting" => matches!(state, "running" | "failed" | "interrupted"),
+            "running" => matches!(
+                state,
+                "success" | "failed" | "cancelled" | "timed_out" | "interrupted"
+            ),
+            _ => false,
+        };
+        if !allowed {
+            return Err(format!(
+                "Invalid execution transition: {} → {state}",
+                self.status
+            ));
+        }
+        self.status = state.into();
+        self.details.revision += 1;
+        self.details.transitions.push(Transition {
+            state: state.into(),
+            at: now(),
+        });
+        if !is_active(state) {
+            self.ended_at = Some(now());
+            self.details.duration_ms = Some(
+                now().saturating_sub(self.details.process_started_at.unwrap_or(self.started_at)),
+            );
+        }
+        Ok(())
+    }
 }

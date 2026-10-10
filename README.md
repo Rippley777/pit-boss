@@ -70,7 +70,7 @@ Port Authority remains optional. Pit Boss looks for its configured executable, s
 
 Desktop data lives in the OS application-data directory for `dev.oddware.pitboss` (on macOS, `~/Library/Application Support/dev.oddware.pitboss/pit-boss.sqlite`). Its containing directory is private to the current user on Unix. Back up the directory while the app is closed.
 
-Every execution is stored. The current UI loads the most recent 500 runs; each run retains the last 1 MiB of combined output. Running output is checkpointed about every two seconds and on completion. A crash can lose the last checkpoint interval; stale running records become **Interrupted** on next launch. Clear output clears the display only. Removing a project preserves files and run history.
+Every execution request, including blocked preflight and cancelled review, is stored. The current UI loads the most recent 500 runs; each run retains the last 1 MiB of sanitized combined output. History defaults to retaining 500 completed runs, configurable between 50 and 5,000; active records are preserved. Running output is checkpointed about every two seconds and on completion. A crash can lose the last checkpoint interval; stale nonterminal records become **Interrupted** on next launch. Clear output clears the display only. Removing a project preserves files and run history.
 
 ## Architecture
 
@@ -116,9 +116,9 @@ Rust integration tests execute harmless commands in temporary directories and co
 
 - The process drawer is a streaming output viewer, not a PTY. Interactive prompts and terminal input are not supported; use **Open terminal** for those commands.
 - Port and resource inspection targets Unix. Windows has a shell-launch/process-tree-stop path but is not validated in this release; Linux desktop packaging is also untested.
-- Stop and restart terminate the entire tracked process group immediately. Daemons that deliberately detach into a new session are outside that group and should be managed by their own service manager.
+- Stop and restart request graceful termination, then escalate after two seconds. Daemons that deliberately detach into a new session are outside that group and should be managed by their own service manager.
 - Bind errors that include a port or a standard --port/-p argument append the current port owner to the run log. Errors that omit the port cannot be diagnosed automatically. Port-owner lookup is also available beside detected listeners.
-- Native cloud providers, remote process management, tray/background persistence, auto-updates, signed distribution, advanced resource charts, and history paging/export are future work. No cloud credentials or remote APIs are required.
+- Native cloud providers, remote process management, tray/background persistence, auto-updates, signed distribution, advanced resource charts, and history paging are future work. No cloud credentials or remote APIs are required.
 
 ## License
 
@@ -137,3 +137,13 @@ Tracking is off when the key or endpoint is missing, and development requires `V
 ## macOS Release
 
 Run `npm run release:mac:check` to validate prerequisites, then `npm run release:desktop` for Developer ID signed, notarized ARM64, Intel and universal apps/DMGs. See [macOS release setup, credentials, outputs and verification](docs/MACOS_RELEASE.md). Existing development and Windows/Linux commands remain available.
+
+## Execution review and audit
+
+Every action uses recorded preflight, expiring confirmation, the existing runner, streamed output, and durable completion. Open **Execution details** in the output drawer for checks, confirmation, failure evidence, timestamps, correlation IDs, artifacts and related retries. Search or copy visible output, pause scrolling, or export the retained sanitized log. Success is reported only after exit code zero and required artifact verification. Timeouts, cancellation and interrupted execution remain distinct.
+
+Expand **Execution safety and preflight** in an action's editor to configure risk, concurrency, timeout, required tools/files/environment names, a deployment branch, expected artifacts, impact and rollback notes. Warnings require explicit approval unless the action forbids overrides. An edited action or expired review requires fresh confirmation. Production always requires typing the project name. Retry creates a new execution and reruns checks; inspect partial side effects first.
+
+Expected artifacts are relative to the working directory. Existing outputs are copied and verified under `.pit-boss-backups` before launch, and checked after exit. Use the existing macOS release helper for signed app bundles, symlinks and notarization; its verified archive and promotion mechanism is preserved. Add `.pit-boss-backups/` to your project's ignore rules if appropriate. Backups are never removed by history retention.
+
+See the [execution audit and implementation boundaries](docs/EXECUTION_AUDIT.md) for the audit matrix, compatibility and validation scope. No Deck execution endpoint or external AI log analysis is enabled.

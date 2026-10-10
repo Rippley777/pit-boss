@@ -53,7 +53,7 @@ test("command execution requires review, streams logs, and becomes searchable hi
     .fill("Env Reaper");
   await expect(page.locator(".data-table tbody tr")).toHaveCount(2);
   await page.getByRole("button", { name: "Stop command", exact: true }).click();
-  await expect(page.locator(".terminal-meta")).toContainText("stopped");
+  await expect(page.locator(".terminal-meta")).toContainText("cancelled");
 });
 
 test("production safeguards and command preset persistence", async ({
@@ -79,7 +79,7 @@ test("production safeguards and command preset persistence", async ({
   await expect(
     dialog.getByRole("button", { name: "Confirm & run" }),
   ).toBeEnabled();
-  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await page
     .locator(".page-tabs")
     .getByRole("button", { name: "Actions", exact: true })
@@ -107,7 +107,7 @@ test("palette keyboard navigation and honest desktop-only registration", async (
     .fill("Repo Reaper · Tests");
   await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog")).toContainText("cargo test");
-  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Add project", exact: true }).click();
   await page.getByRole("button", { name: "Inspect", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("desktop app");

@@ -159,6 +159,27 @@ export default function ProjectDetail({
               <span className="action-description">{c.description}</span>
             )}
             <code>{c.command}</code>
+            <span className="action-description">
+              Risk:{" "}
+              {(c.environment.toLowerCase() === "production"
+                ? "production critical"
+                : c.dangerous
+                  ? "destructive"
+                  : c.policy?.risk || "caution"
+              ).replaceAll("_", " ")}{" "}
+              ·{" "}
+              {(() => {
+                const history = runs.filter(
+                  (r) => r.projectId === p.id && r.presetId === c.id,
+                );
+                const completed = history.filter(
+                  (r) => r.endedAt && r.status === "success",
+                );
+                return history[0]
+                  ? `Last: ${history[0].status} · ${ago(history[0].startedAt)}${completed.length >= 3 ? ` · Typical: ${Math.round(completed.reduce((sum, r) => sum + (r.endedAt! - r.startedAt), 0) / completed.length / 1000)}s` : ""}`
+                  : "No executions yet";
+              })()}
+            </span>
           </div>
           <span className="tag">{c.category}</span>
           <span className="tag">{c.environment}</span>
@@ -730,9 +751,9 @@ export function RunTable({
         <thead>
           <tr>
             <th>Project / command</th>
-            <th>Status</th>
+            <th>Status / exit</th>
             <th>Environment</th>
-            <th>Commit</th>
+            <th>Trigger / commit</th>
             <th>Duration</th>
             <th>Started</th>
             <th />
@@ -747,17 +768,21 @@ export function RunTable({
               onKeyDown={(e) => e.key === "Enter" && onLogs(r)}
             >
               <td>
-                <strong>{r.projectName}</strong>
+                <strong>
+                  {r.projectName} · {r.name}
+                </strong>
                 <code>{r.command}</code>
               </td>
               <td>
                 <StatusBadge status={r.status} />
+                <span className="muted"> · {r.exitCode ?? "—"}</span>
               </td>
               <td>
                 <span className="tag">{r.environment}</span>
               </td>
               <td>
                 <span className="commit">
+                  {r.details?.triggerSource || "manual"} ·{" "}
                   <GitCommitHorizontal size={13} />
                   {r.commit.slice(0, 7) || "—"}
                 </span>

@@ -84,6 +84,19 @@ export default function App() {
     [page, setPage] = useState<Page>("The Pit"),
     [projectId, setProjectId] = useState<string | null>(null),
     [actionProjectId, setActionProjectId] = useState<string | null>(null);
+  const [historyProject, setHistoryProject] = useState("all"),
+    [historyAction, setHistoryAction] = useState("all"),
+    [historyTrigger, setHistoryTrigger] = useState("all"),
+    [historyFrom, setHistoryFrom] = useState(""),
+    [historyTo, setHistoryTo] = useState(""),
+    [historySort, setHistorySort] = useState("newest"),
+    [retention, setRetention] = useState(500);
+  useEffect(() => {
+    void api
+      .retention()
+      .then(setRetention)
+      .catch(() => {});
+  }, []);
   const [search, setSearch] = useState(""),
     [status, setStatus] = useState("all"),
     [group, setGroup] = useState("All projects"),
@@ -120,9 +133,23 @@ export default function App() {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    const completed = new Set<string>();
     void (async () => {
       try {
         const release = await api.subscribe((run) => {
+          if (!disposed && run.endedAt && !completed.has(run.id)) {
+            completed.add(run.id);
+            if (
+              run.status === "failed" ||
+              run.status === "timed_out" ||
+              run.status === "interrupted" ||
+              (run.endedAt - run.startedAt > 10000 && run.status === "success")
+            )
+              notify(
+                `${run.projectName} · ${run.name}: ${run.status === "success" ? "succeeded" : run.status.replaceAll("_", " ")}${run.details?.failure ? ` — ${run.details.failure.summary}` : ""}`,
+                run.status !== "success",
+              );
+          }
           if (!disposed)
             setData((d) => ({
               ...d,
@@ -248,7 +275,7 @@ export default function App() {
   }
   async function confirmRun(items: RunRequest[]) {
     const results = await Promise.allSettled(
-      items.map(async ({ project, preset, restart }) => {
+      items.map(async ({ restart, prepared, confirmation, warnings }) => {
         if (restart?.status === "running") {
           await api.stop(restart.id);
           for (let i = 0; i < 50; i++) {
@@ -262,15 +289,11 @@ export default function App() {
             await new Promise((resolve) => setTimeout(resolve, 100));
           }
         }
+        if (!prepared) throw new Error("Run preflight before confirming.");
         const run = await api.run(
-          project.id,
-          preset.id,
-          preset.confirmation ||
-            preset.dangerous ||
-            preset.confirmationMode === "Always" ||
-            preset.environment.toLowerCase() === "production"
-            ? project.name
-            : "run",
+          prepared.id,
+          confirmation || "",
+          warnings || false,
         );
         setData((d) => ({
           ...d,
@@ -298,6 +321,7 @@ export default function App() {
         project,
         preset,
         restart: run.status === "running" ? run : undefined,
+        retryOf: run.id,
       });
     else
       notify(
@@ -341,17 +365,49 @@ export default function App() {
     cpu = running.reduce((sum, r) => sum + r.cpu, 0);
   const filteredRuns = useMemo(
     () =>
-      data.runs.filter(
-        (r) =>
-          (page !== "Deployments" || r.category === "Deploy") &&
-          (status === "all" || r.status === status) &&
-          (group === "All projects" ||
-            data.projects.find((p) => p.id === r.projectId)?.group === group) &&
-          `${r.projectName} ${r.name} ${r.command} ${r.branch} ${r.environment} ${r.output}`
-            .toLowerCase()
-            .includes(search.toLowerCase()),
-      ),
-    [data, page, status, group, search],
+      data.runs
+        .filter(
+          (r) =>
+            (page !== "Deployments" || r.category === "Deploy") &&
+            (historyProject === "all" || r.projectId === historyProject) &&
+            (historyAction === "all" || r.category === historyAction) &&
+            (historyTrigger === "all" ||
+              (r.details?.triggerSource || "manual") === historyTrigger) &&
+            (!historyFrom ||
+              r.startedAt >= new Date(`${historyFrom}T00:00:00`).getTime()) &&
+            (!historyTo ||
+              r.startedAt <= new Date(`${historyTo}T23:59:59.999`).getTime()) &&
+            (status === "all" || r.status === status) &&
+            (group === "All projects" ||
+              data.projects.find((p) => p.id === r.projectId)?.group ===
+                group) &&
+            `${r.projectName} ${r.name} ${r.command} ${r.branch} ${r.environment} ${r.output}`
+              .toLowerCase()
+              .includes(search.toLowerCase()),
+        )
+        .sort((a, b) =>
+          historySort === "oldest"
+            ? a.startedAt - b.startedAt
+            : historySort === "duration"
+              ? (b.endedAt || now) -
+                b.startedAt -
+                ((a.endedAt || now) - a.startedAt)
+              : b.startedAt - a.startedAt,
+        ),
+    [
+      data,
+      page,
+      status,
+      group,
+      search,
+      historyProject,
+      historyAction,
+      historyTrigger,
+      historyFrom,
+      historyTo,
+      historySort,
+      now,
+    ],
   );
   function batch(category: string) {
     setGroupMenu(false);
@@ -1305,6 +1361,9 @@ export default function App() {
                               "failed",
                               "stopped",
                               "interrupted",
+                              "cancelled",
+                              "timed_out",
+                              "awaiting_confirmation",
                             ].map((s) => (
                               <option key={s} value={s}>
                                 {s}
@@ -1313,6 +1372,88 @@ export default function App() {
                           </select>
                           <span className="tag">
                             {filteredRuns.length} results
+                          </span>
+                        </div>
+                        <div className="history-extra-filters">
+                          <select
+                            aria-label="Filter history project"
+                            value={historyProject}
+                            onChange={(e) => setHistoryProject(e.target.value)}
+                          >
+                            <option value="all">All projects</option>
+                            {data.projects.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            aria-label="Filter action type"
+                            value={historyAction}
+                            onChange={(e) => setHistoryAction(e.target.value)}
+                          >
+                            <option value="all">All action types</option>
+                            {[...new Set(data.runs.map((r) => r.category))].map(
+                              (c) => (
+                                <option key={c}>{c}</option>
+                              ),
+                            )}
+                          </select>
+                          <select
+                            aria-label="Filter trigger source"
+                            value={historyTrigger}
+                            onChange={(e) => setHistoryTrigger(e.target.value)}
+                          >
+                            <option value="all">All triggers</option>
+                            <option value="manual">Manual</option>
+                          </select>
+                          <input
+                            type="date"
+                            aria-label="History start date"
+                            value={historyFrom}
+                            onChange={(e) => setHistoryFrom(e.target.value)}
+                          />
+                          <input
+                            type="date"
+                            aria-label="History end date"
+                            value={historyTo}
+                            onChange={(e) => setHistoryTo(e.target.value)}
+                          />
+                          <select
+                            aria-label="Sort history"
+                            value={historySort}
+                            onChange={(e) => setHistorySort(e.target.value)}
+                          >
+                            <option value="newest">Newest first</option>
+                            <option value="oldest">Oldest first</option>
+                            <option value="duration">Longest first</option>
+                          </select>
+                          <select
+                            aria-label="Execution retention"
+                            value={retention}
+                            onChange={async (e) => {
+                              try {
+                                const count = await api.retention(
+                                  Number(e.target.value),
+                                );
+                                setRetention(count);
+                                setData(await api.snapshot());
+                                notify(
+                                  `Keeping the latest ${count} completed executions. Active records are preserved.`,
+                                );
+                              } catch (error) {
+                                notify(String(error), true);
+                              }
+                            }}
+                          >
+                            {[50, 100, 500, 1000, 5000].map((count) => (
+                              <option key={count} value={count}>
+                                Keep {count} completed runs
+                              </option>
+                            ))}
+                          </select>
+                          <span className="muted">
+                            Most recent 500 records · retention {retention}
                           </span>
                         </div>
                         {page === "Deployments" && (

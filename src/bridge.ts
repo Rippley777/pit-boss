@@ -1,6 +1,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { plainText } from "./terminal-text";
 import { createDemo } from "./demo";
 import type { Preset, Project, Run, Snapshot } from "./types";
 export const isDesktop = "__TAURI_INTERNALS__" in window;
@@ -28,9 +29,9 @@ function upgrade(snapshot: Snapshot): Snapshot {
         ...c,
         description: c.description || "",
         icon: c.icon || "Terminal",
-        confirmationMode: c.confirmationMode || (c.confirmation
-          ? ("Always" as const)
-          : ("Never" as const)),
+        confirmationMode:
+          c.confirmationMode ||
+          (c.confirmation ? ("Always" as const) : ("Never" as const)),
         dangerous: c.dangerous || false,
         pinned: c.pinned || false,
         sortOrder: c.sortOrder ?? sortOrder,
@@ -51,6 +52,7 @@ function persist() {
   }
 }
 function notify(run: Run) {
+  if (run.details) run.details.revision++;
   persist();
   listeners.forEach((fn) => fn({ ...run }));
 }
@@ -116,13 +118,100 @@ export const api = {
     demo.projects = demo.projects.filter((p) => p.id !== projectId);
     persist();
   },
-  async run(
+  async exportLog(run: Run): Promise<void> {
+    if (isDesktop) {
+      await invoke("export_execution", { runId: run.id });
+      return;
+    }
+    const href = URL.createObjectURL(
+      new Blob([plainText(run.output)], { type: "text/plain;charset=utf-8" }),
+    );
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = `pit-boss-${run.id}.log`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
+  },
+  async retention(count?: number): Promise<number> {
+    if (isDesktop) return invoke("history_retention", { count });
+    if (count !== undefined)
+      localStorage.setItem("pit-boss-retention", String(count));
+    return Number(localStorage.getItem("pit-boss-retention") || 500);
+  },
+  async prepare(
     projectId: string,
     presetId: string,
-    confirmation: string,
+    retryOf?: string,
   ): Promise<Run> {
     if (isDesktop)
-      return invoke("run_command", { projectId, presetId, confirmation });
+      return invoke("prepare_execution", { projectId, presetId, retryOf });
+    const p = demo.projects.find((p) => p.id === projectId)!;
+    const c = p.commands.find((c) => c.id === presetId)!;
+    const r: Run = {
+      id: crypto.randomUUID(),
+      projectId,
+      projectName: p.name,
+      presetId,
+      name: c.name,
+      command: c.command,
+      cwd: c.cwd ? `${p.path}/${c.cwd}` : p.path,
+      category: c.category,
+      environment: c.environment,
+      branch: p.git.branch,
+      commit: p.git.commit,
+      startedAt: Date.now(),
+      endedAt: null,
+      exitCode: null,
+      status: "awaiting_confirmation",
+      output: "",
+      pid: null,
+      ports: [],
+      cpu: 0,
+      memory: 0,
+      details: {
+        revision: 1,
+        transitions: [{ state: "awaiting_confirmation", at: Date.now() }],
+        preflight: [
+          {
+            id: "demo",
+            description: "Browser simulation",
+            result: "skipped",
+            explanation:
+              "Desktop checks are simulated; no filesystem or shell access.",
+            resolution: "",
+            durationMs: 0,
+          },
+        ],
+        risk:
+          c.environment.toLowerCase() === "production"
+            ? "production_critical"
+            : c.dangerous
+              ? "destructive"
+              : c.policy?.risk || "caution",
+        triggerSource: "manual",
+        correlationId: crypto.randomUUID(),
+        retryOf,
+        logReference: "demo",
+        logTruncated: false,
+        outputEvents: [],
+        artifacts: [],
+      },
+    };
+    demo.runs.unshift(r);
+    notify(r);
+    return structuredClone(r);
+  },
+  async run(
+    executionId: string,
+    confirmation: string,
+    warnings: boolean,
+  ): Promise<Run> {
+    if (isDesktop)
+      return invoke("run_command", { executionId, confirmation, warnings });
+    const prepared = demo.runs.find((r) => r.id === executionId);
+    if (!prepared || prepared.status !== "awaiting_confirmation")
+      throw new Error("Prepare a new execution review.");
+    const { projectId, presetId } = prepared;
     const p = demo.projects.find((p) => p.id === projectId)!,
       c = p.commands.find((c) => c.id === presetId)!;
     if (
@@ -135,29 +224,23 @@ export const api = {
       )
     )
       throw new Error("This command is already running.");
-    const r: Run = {
-      id: crypto.randomUUID(),
-      projectId,
-      projectName: p.name,
-      presetId,
-      name: c.name,
-      command: c.command,
-      cwd: c.cwd || p.path,
-      category: c.category,
-      environment: c.environment,
-      branch: p.git.branch,
-      commit: p.git.commit,
-      startedAt: Date.now(),
-      endedAt: null,
-      exitCode: null,
-      status: "running",
-      output: `[DEMO] Simulating ${c.name}. No shell command is executed.\n$ ${c.command}\n\n`,
-      pid: null,
-      ports: [],
-      cpu: 0,
-      memory: 0,
+    const needsTyped =
+      c.confirmation ||
+      c.dangerous ||
+      c.confirmationMode === "Always" ||
+      ["destructive", "production_critical"].includes(prepared.details!.risk);
+    if (confirmation !== (needsTyped ? p.name : "run"))
+      throw new Error("Confirmation did not match.");
+    const r = prepared;
+    r.status = "running";
+    r.details!.processStartedAt = Date.now();
+    r.details!.revision++;
+    r.details!.confirmation = {
+      at: Date.now(),
+      expiresAt: r.startedAt + 300000,
+      warningOverrides: [],
     };
-    demo.runs.unshift(r);
+    r.output = `[DEMO] Simulating ${c.name}. No shell command is executed.\n$ ${c.command}\n\n`;
     notify(r);
     timers.set(
       r.id,
@@ -189,7 +272,7 @@ export const api = {
     timers.delete(runId);
     const r = demo.runs.find((r) => r.id === runId);
     if (r) {
-      r.status = "stopped";
+      r.status = "cancelled";
       r.endedAt = Date.now();
       r.ports = [];
       r.cpu = 0;
@@ -229,7 +312,11 @@ export const api = {
 export function duration(run: Run) {
   const s = Math.max(
     0,
-    Math.floor(((run.endedAt ?? Date.now()) - run.startedAt) / 1000),
+    Math.floor(
+      ((run.endedAt ?? Date.now()) -
+        (run.details?.processStartedAt ?? run.startedAt)) /
+        1000,
+    ),
   );
   return s < 60
     ? `${s}s`

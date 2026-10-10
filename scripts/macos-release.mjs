@@ -94,62 +94,130 @@ export function credentials(env, required = true) {
   return null;
 }
 
-export function redact(text, env = process.env) {
-  const secrets = Object.entries(env)
+function secretValues(env) {
+  return Object.entries(env)
     .filter(
       ([key, value]) =>
         value &&
-        /PASSWORD|TOKEN|SECRET|APPLE_API_|APPLE_ID|APPLE_CERTIFICATE/.test(key),
+        /PASSWORD|TOKEN|SECRET|API_KEY|PRIVATE_KEY|CREDENTIAL|APPLE_API_|APPLE_ID|APPLE_CERTIFICATE/.test(
+          key.toUpperCase(),
+        ),
     )
     .flatMap(([, value]) => [value, ...value.split(/\r?\n/).filter(Boolean)])
     .sort((a, b) => b.length - a.length);
-  return secrets.reduce(
+}
+export function redact(text, env = process.env) {
+  return secretValues(env).reduce(
     (output, value) => output.split(value).join("[REDACTED]"),
     String(text),
   );
 }
 
-function runner(root, log) {
+export function outputSanitizer(env) {
+  const secrets = secretValues(env);
+  let pending = "";
+  return (chunk, end = false) => {
+    pending += chunk;
+    let cut = pending.length;
+    if (!end) {
+      for (const secret of secrets) {
+        for (
+          let length = Math.min(secret.length - 1, pending.length);
+          length > 0;
+          length--
+        ) {
+          if (pending.endsWith(secret.slice(0, length))) {
+            cut = Math.min(cut, pending.length - length);
+            break;
+          }
+        }
+      }
+      for (const secret of secrets) {
+        for (
+          let at = pending.indexOf(secret);
+          at >= 0;
+          at = pending.indexOf(secret, at + 1)
+        ) {
+          if (at < cut && at + secret.length > cut) cut = at;
+        }
+      }
+    }
+    const ready = secrets.reduce(
+      (text, secret) => text.split(secret).join("[REDACTED]"),
+      pending.slice(0, cut),
+    );
+    pending = pending.slice(cut);
+    return ready;
+  };
+}
+
+export function runner(
+  root,
+  log,
+  consoleOutput = process.stdout,
+  errorOutput = consoleOutput === process.stdout
+    ? process.stderr
+    : consoleOutput,
+) {
   return async (
     program,
     args,
     { env = process.env, label = basename(program) } = {},
   ) => {
-    await log.write(`\n[${label}]\n`); // Never log arguments: notarytool can receive a password.
-    return new Promise((resolveRun, reject) => {
-      const child = spawn(program, args, {
-        cwd: root,
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let output = "";
-      const consume = (stream) => {
-        let pending = "";
-        stream.setEncoding("utf8");
-        stream.on("data", (chunk) => {
-          output += chunk;
-          pending += chunk;
-          const lines = pending.split("\n");
-          pending = lines.pop();
-          for (const line of lines) void log.write(`${redact(line, env)}\n`);
-        });
-        stream.on("end", () => {
-          if (pending) void log.write(`${redact(pending, env)}\n`);
-        });
-      };
-      consume(child.stdout);
-      consume(child.stderr);
-      child.on("error", reject);
-      child.on("close", (code) =>
-        code === 0
-          ? resolveRun(output)
-          : reject(
-              new Error(
-                `${label} failed (${code}). ${redact(output, env).slice(-1800)}`,
-              ),
-            ),
-      );
+    await log.write(`\n[${label}]\n`); // Argument vectors may contain notarization credentials.
+    const child = spawn(program, args, {
+      cwd: root,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    const completed = new Promise((resolveRun, reject) => {
+      child.once("error", reject);
+      child.once("close", resolveRun);
+    });
+    let output = "";
+    const consume = async (stream, destination) => {
+      const sanitize = outputSanitizer(env);
+      const publish = async (text) => {
+        if (!text) return;
+        await log.write(text);
+        if (!destination.write(text))
+          await new Promise((resolveDrain, reject) => {
+            const drained = () => {
+              destination.off("error", failed);
+              resolveDrain();
+            };
+            const failed = (error) => {
+              destination.off("drain", drained);
+              reject(error);
+            };
+            destination.once("drain", drained);
+            destination.once("error", failed);
+          });
+      };
+      stream.setEncoding("utf8");
+      for await (const chunk of stream) {
+        // Small diagnostic commands return their complete output; builds retain a bounded tail.
+        output = (output + chunk).slice(-1_048_576);
+        await publish(sanitize(chunk));
+      }
+      await publish(sanitize("", true));
+    };
+    let code;
+    try {
+      [, , code] = await Promise.all([
+        consume(child.stdout, consoleOutput),
+        consume(child.stderr, errorOutput),
+        completed,
+      ]);
+    } catch (error) {
+      child.kill();
+      throw error;
+    }
+    if (code !== 0)
+      throw new Error(
+        `${label} failed (${code}). ${redact(output, env).slice(-1800)}`,
+      );
+    return output;
   };
 }
 

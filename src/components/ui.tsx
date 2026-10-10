@@ -101,7 +101,13 @@ export function StatusBadge({
             running: "Running",
             failed: "Failed",
             stopped: "Stopped",
-            success: "Success",
+            success: "Succeeded",
+            queued: "Queued",
+            preflighting: "Preflighting",
+            awaiting_confirmation: "Awaiting confirmation",
+            starting: "Starting",
+            cancelled: "Cancelled",
+            timed_out: "Timed out",
             interrupted: "Interrupted",
           } as Record<string, string>
         )[status] ||

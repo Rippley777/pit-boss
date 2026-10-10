@@ -1,7 +1,39 @@
 use crate::models::GitInfo;
 use std::{path::Path, process::Command};
 fn git(path: &Path, args: &[&str]) -> String {
-    Command::new("git")
+    // Git status can invoke configured clean/process filters. Disable them for inspection.
+    // Reading configuration keys does not run the filter or expose its command/value.
+    let keys = Command::new("git")
+        .args([
+            "config",
+            "--null",
+            "--name-only",
+            "--get-regexp",
+            r"^filter\..*\.(clean|smudge|process|required)$",
+        ])
+        .current_dir(path)
+        .output()
+        .ok();
+    let mut command = Command::new("git");
+    if let Some(keys) = keys {
+        for key in String::from_utf8_lossy(&keys.stdout)
+            .split('\0')
+            .filter(|key| key.starts_with("filter."))
+        {
+            command.args([
+                "-c",
+                &format!(
+                    "{key}={}",
+                    if key.ends_with(".required") {
+                        "false"
+                    } else {
+                        ""
+                    }
+                ),
+            ]);
+        }
+    }
+    command
         .args([
             "-c",
             "core.fsmonitor=false",
@@ -49,5 +81,31 @@ pub fn safe_remote(remote: &str) -> String {
             u.to_string().trim_end_matches(".git").to_string()
         }
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod inspection_tests {
+    use super::*;
+    #[test]
+    fn inspection_does_not_execute_repository_clean_filters() {
+        let dir = tempfile::tempdir().unwrap();
+        let call = |args: &[&str]| {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success());
+        };
+        call(&["init", "--quiet"]);
+        std::fs::write(dir.path().join(".gitattributes"), "*.txt filter=probe\n").unwrap();
+        std::fs::write(dir.path().join("file.txt"), "before").unwrap();
+        call(&["add", "."]);
+        call(&["config", "filter.probe.clean", "touch filter-executed; cat"]);
+        std::fs::write(dir.path().join("file.txt"), "after").unwrap();
+        let info = inspect(dir.path());
+        assert!(info.changes > 0);
+        assert!(!dir.path().join("filter-executed").exists());
     }
 }

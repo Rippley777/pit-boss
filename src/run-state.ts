@@ -1,4 +1,12 @@
 import type { Run } from "./types";
+export const isActive = (status: Run["status"]) =>
+  [
+    "queued",
+    "preflighting",
+    "awaiting_confirmation",
+    "starting",
+    "running",
+  ].includes(status);
 /** IPC responses can arrive after newer lifecycle events; a terminal state must never regress. */
 export function mergeRuns(
   current: Run[],
@@ -11,10 +19,15 @@ export function mergeRuns(
     if (
       previous &&
       (preserveExisting ||
-        (previous.status !== "running" && run.status === "running"))
+        (!isActive(previous.status) && isActive(run.status)) ||
+        (previous.details &&
+          run.details &&
+          previous.details.revision > run.details.revision))
     )
       continue;
     runs.set(run.id, run);
   }
-  return [...runs.values()].sort((a, b) => b.startedAt - a.startedAt);
+  return [...runs.values()]
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .filter((run, index) => index < 500 || isActive(run.status));
 }
